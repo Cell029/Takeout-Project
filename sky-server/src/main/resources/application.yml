@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    active: dev
+  main:
+    allow-circular-references: true
+  datasource:
+    driver-class-name: ${sky.datasource.driver-class-name}
+    url: jdbc:mysql://${sky.datasource.host}:${sky.datasource.port}/${sky.datasource.database}?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${sky.datasource.username}
+    password: ${sky.datasource.password}
+
+mybatis:
+  #mapper配置文件
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.sky.entity
+  configuration:
+    #开启驼峰命名
+    map-underscore-to-camel-case: true
+
+logging:
+  level:
+    com:
+      sky: debug
+#        mapper: debug
+#        service: info
+#        controller: info
+
+sky:
+  jwt:
+    # 设置 jwt 签名加密时使用的秘钥
+    admin-secret-key: "RUwYpDnq3GZ8qQsQyDa4bNS0HHV1o7bRk+rCIMeV60U="
+    # 设置 jwt 过期时间
+    admin-ttl: 7200000
+    # 设置前端传递过来的令牌名称
+    admin-token-name: token
+
+# springdoc-openapi 项目配置
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html # 指定 Swagger UI 的访问路径，现在设置的是默认路径，它会自动映射导 Knife4j 的默认访问路径 /doc.html
+    tags-sorter: alpha # 接口文档页面中，标签（tags）排序方式，alpha 表示按字母顺序排序
+    operations-sorter: alpha # 操作（接口方法）排序方式，也用字母序
+  api-docs:
+    path: /v3/api-docs # 这是 OpenAPI 生成的接口文档 JSON 文件路径，默认 /v3/api-docs，前端页面会根据它请求数据
+  group-configs: # 支持多个接口分组配置，方便大型项目拆分不同模块接口文档
+    - group: 'default' # 分组名，设置默认分组 default
+      paths-to-match: '/**' # 该分组扫描的接口路径，这里匹配所有接口 /**
+      packages-to-scan: com.sky.controller # 扫描的包路径，这里只扫描 com.sky 这个包里的 Controller，扫描出来的文档就放到当前设置的分组
+
+# knife4j 的增强配置，不需要增强可以不配
+knife4j:
+  enable: true # 是否启用 Knife4j 增强功能，true 表示启用
+  setting:
+    language: zh_cn # 界面语言，这里设置为简体中文（zh_cn）
