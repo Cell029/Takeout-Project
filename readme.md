@@ -511,5 +511,699 @@ public static String getCurrentUsername() {
 ```
 
 ****
+# 四、员工分页查询
+
+## 1. 功能实现
+
+系统中的员工很多的时候，如果在一个页面中全部展示出来会显得比较乱，不便于查看，所以一般的系统中都会以分页的方式来展示列表数据。而在分页查询页面中，除了分页条件以外，
+还有一个查询条件 "员工姓名"。从接口文档中发现请求参数类型为 Query，不是 json 格式提交，所以直接在路径后拼接URL 查询参数，
+例如：/admin/employee/page?name=zhangsan。返回的响应数据则是一个用数组封装的 json 对象，每个数组是一个 Employee 类型对象，封装员工的属性。
+
+Controller 层：
+
+EmployeePageQueryDTO 是用来封装一些简单的传递参数，包括起始页、每页条数和用来查询的员工姓名。
+
+```java
+// 分页查询员工信息
+@GetMapping("/page")
+@Operation(summary = "员工分页查询")
+public Result<PageResult> page(EmployeePageQueryDTO employeePageQueryDTO){
+    log.info("员工分页查询，参数为：{}", employeePageQueryDTO);
+    PageResult pageResult = employeeService.pageQuery(employeePageQueryDTO);
+    return Result.success(pageResult);
+}
+```
+
+Service 层：
+
+```java
+@Override
+public PageResult pageQuery(EmployeePageQueryDTO employeePageQueryDTO) {
+    // select * from employee limit 0, 10
+    // 开始分页查询
+    PageHelper.startPage(employeePageQueryDTO.getPage(), employeePageQueryDTO.getPageSize());
+    Page<Employee> page = employeeMapper.pageQuery(employeePageQueryDTO);
+    // 获取查询到的记录条数
+    long total = page.getTotal();
+    List<Employee> records = page.getResult();
+    return new PageResult(total, records);
+}
+```
+
+关于 startPage 方法，传入了起始页和每页条数即可启动分页，实际上是调用了下面的重载方法，同时使用默认值 DEFAULT_COUNT = true
+
+```java
+// 默认会统计总记录数
+protected static boolean DEFAULT_COUNT = true;
+
+public static <E> Page<E> startPage(int pageNum, int pageSize) {
+    return startPage(pageNum, pageSize, DEFAULT_COUNT);
+}
+```
+
+```java
+public static <E> Page<E> startPage(int pageNum, int pageSize, boolean count) {
+    return startPage(pageNum, pageSize, count, (Boolean)null, (Boolean)null);
+}
+```
+
+```java
+public static <E> Page<E> startPage(int pageNum, int pageSize, boolean count, Boolean reasonable, Boolean pageSizeZero) {
+    Page<E> page = new Page(pageNum, pageSize, count);
+    page.setReasonable(reasonable);
+    page.setPageSizeZero(pageSizeZero);
+    Page<E> oldPage = getLocalPage();
+    if (oldPage != null && oldPage.isOrderByOnly()) {
+        page.setOrderBy(oldPage.getOrderBy());
+    }
+
+    setLocalPage(page);
+    return page;
+}
+```
+
+通过 Page<E> oldPage = getLocalPage(); 获取当前线程已有的分页对象
+
+```java
+protected static final ThreadLocal<Page> LOCAL_PAGE = new ThreadLocal();
+
+public static <T> Page<T> getLocalPage() {
+    return (Page)LOCAL_PAGE.get();
+}
+```
+
+最后将新数据再存入 ThreadLoad 中，所以通过 ThreadLoad 的方式动态保证每个分页请求的信息独立（每个请求只看到属于自己线程的分页参数）
+
+```java
+protected static void setLocalPage(Page page) {
+    LOCAL_PAGE.set(page);
+}
+```
+
+****
+## 2. 测试与日期格式优化
+
+访问 http://localhost:8080/doc.html ，进入员工分页查询，虽然能够正常展示每页的数据，但是最后操作时间格式不清晰，没有使用标准的形式展示：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": {
+    "total": 0,
+    "records": [
+      {
+        "id": 2,
+        "username": "zhangsan",
+        "name": "张三",
+        "password": "e10adc3949ba59abbe56e057f20f883e",
+        "phone": "16676538878",
+        "sex": "1",
+        "idNumber": "647262548991901241",
+        "status": 1,
+        "createTime": "2025-07-10T22:16:19",
+        "updateTime": "2025-07-10T22:16:19",
+        "createUser": 10,
+        "updateUser": 10
+      },
+      {
+        "id": 1,
+        "username": "admin",
+        "name": "管理员",
+        "password": "e10adc3949ba59abbe56e057f20f883e",
+        "phone": "13812312312",
+        "sex": "1",
+        "idNumber": "110101199001010047",
+        "status": 1,
+        "createTime": "2022-02-15T15:51:20",
+        "updateTime": "2022-02-17T09:16:20",
+        "createUser": 10,
+        "updateUser": 1
+      }
+    ]
+  }
+}
+```
+
+所以可以给对应的字段上添加注解，对日期进行格式化：
+
+```java
+@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+private LocalDateTime createTime;
+@JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+private LocalDateTime updateTime;
+```
+
+或者添加自定义的消息转换器，统一对日期类型进行格式处理，但需要注意的是：Spring Boot 默认使用 Jackson 作为 JSON 解析器，自动注册一个 MappingJackson2HttpMessageConverter，
+springdoc-openapi（和 Knife4j）依赖默认的 Jackson 配置，来序列化 OpenAPI 规范文档（JSON 格式），然后供前端 swagger-ui.html 或 doc.html 读取渲染接口文档，
+如果直接写了一个 JacksonObjectMapper，扩展了日期时间格式等自定义序列化规则，并在配置中用如下代码新增一个消息转换器：
+
+```java
+// JacksonObjectMapper 为自定义的转换器
+converters.add(0, new MappingJackson2HttpMessageConverter(new JacksonObjectMapper())); 
+```
+
+这种操作其实是覆盖了默认的转换器链，导致 springdoc-openapi 用的转换器变成了自定义的，而自定义的 Jackson 配置不完全兼容它生成的接口文档数据结构，
+或者导致格式不对。于是访问接口文档的 JSON 时候，格式不对或缺少 openapi 版本字段，导致页面渲染失败，提示：
+
+```text
+Unable to render this definition
+The provided definition does not specify a valid version field.
+```
+
+所以不能直接用 converters.add(0, ...) 新建转换器覆盖，因为 Spring MVC 的消息转换器是按顺序维护的，一个请求匹配第一个合适的转换器执行，如果把自定义的转换器放最前面，
+那么所有请求都会优先用你的转换器，包括 springdoc-openapi 也会使用。
+
+SpringBoot 中默认的转换器如下：
+
+- ByteArrayHttpMessageConverter：处理 byte[] 数组
+- StringHttpMessageConverter：处理 String
+- ResourceHttpMessageConverter：处理 Resource，文件流、静态资源等
+- SourceHttpMessageConverter：处理 javax.xml.transform.Source，主要用于 XML 文件
+- AllEncompassingFormHttpMessageConverter：处理表单提交 application/x-www-form-urlencoded 和 multipart/form-data
+- MappingJackson2HttpMessageConverter：处理 application/json，这是 Spring Boot 默认用来将 Java 和 JSON 转换的
+- MappingJackson2XmlHttpMessageConverter：处理 application/xml
+- ......
+
+而在这里要进行的替换操作，就是替换掉 MappingJackson2HttpMessageConverter 转换器，它使用的 ObjectMapper 是 Spring Boot 默认配置的，包括日期格式、字段命名策略等。
+是 springdoc-openapi 和 knife4j 生成接口文档时用于响应示例结构的关键组件。而用自定义的 JacksonObjectMapper 替换了 Spring 默认的 ObjectMapper，
+保留了这个转换器的类型、顺序、支持的 MIME 类型，只替换了它内部用来处理 JSON 的工具类 ObjectMapper，用于定制日期格式。不影响 springdoc-openapi 和 knife4j 对默认转换器的依赖。
+
+```java
+@Override
+public void extendMessageConverters(List<HttpMessageConverter<?>> converters) {
+    // 正确替换 ObjectMapper，而不是插入新 converter
+    for (HttpMessageConverter<?> converter : converters) {
+        if (converter instanceof MappingJackson2HttpMessageConverter) {
+            ((MappingJackson2HttpMessageConverter) converter)
+                    .setObjectMapper(new JacksonObjectMapper());
+            break;
+        }
+    }
+}
+```
+
+```java
+public class JacksonObjectMapper extends ObjectMapper {
+    // 定义了三个标准时间格式，用于格式化 LocalDate、LocalDateTime、LocalTime
+    public static final String DEFAULT_DATE_FORMAT = "yyyy-MM-dd";
+    public static final String DEFAULT_DATE_TIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
+    public static final String DEFAULT_TIME_FORMAT = "HH:mm:ss";
+
+    public JacksonObjectMapper() {
+        super();
+
+        // 允许对象中含有未知属性，不报错
+        this.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        this.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false); // 避免以时间戳的形式输出
+
+        // 注册 Java 8 时间模块，并设置自定义格式
+        JavaTimeModule javaTimeModule = new JavaTimeModule();
+        // 自定义序列化器，将 LocalDateTime 类型转换为 "yyyy-MM-dd HH:mm:ss" 格式字符串
+        javaTimeModule.addSerializer(LocalDateTime.class,
+                new LocalDateTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
+        // 自定义反序列化器，将 "yyyy-MM-dd HH:mm:ss" 格式字符串转换为 Java 中的 LocalDateTime 对象
+        javaTimeModule.addDeserializer(LocalDateTime.class,
+                new LocalDateTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
+        // LocalDate 和 LocalTime 同理
+        javaTimeModule.addSerializer(LocalDate.class,
+                new LocalDateSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
+        javaTimeModule.addDeserializer(LocalDate.class,
+                new LocalDateDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
+
+        javaTimeModule.addSerializer(LocalTime.class,
+                new LocalTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
+        javaTimeModule.addDeserializer(LocalTime.class,
+                new LocalTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
+
+        // 注册功能模块 例如，可以添加自定义序列化器和反序列化器
+        this.registerModule(javaTimeModule);
+    }
+}
+```
+
+如果新建一个 MappingJackson2HttpMessageConverter 就会覆盖掉默认 converter 的优先级，而自定义的新的 converter 没有 Spring Boot 自动配置的参数，比如默认媒体类型、字符集等，
+但 knife4j 和 springdoc-openapi 依赖的是原来的 converter，所以它们不一定能兼容新的 converter。
+
+```java
+MappingJackson2HttpMessageConverter converter = new MappingJackson2HttpMessageConverter();
+converter.setObjectMapper(new JacksonObjectMapper());
+converters.add(0, converter); // 放到最前面
+```
+
+设置成功后的展示：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": {
+    "total": 0,
+    "records": [
+      {
+        ...
+        "createTime": "2025-07-10 22:16:19",
+        "updateTime": "2025-07-10 22:16:19",
+      },
+      {
+        ...
+        "createTime": "2022-02-15 15:51:20",
+        "updateTime": "2022-02-17 09:16:20",
+      }
+    ]
+  }
+}
+```
+
+****
+# 五、启用、禁用员工账号功能
+
+## 1. 功能实现
+
+在员工管理列表页面，可以对某个员工账号进行启用或者禁用操作。账号禁用的员工不能登录系统，启用后的员工可以正常登录。如果某个员工账号状态为正常，则按钮显示为"禁用"，如果员工账号状态为已禁用，则按钮显示为"启用"。
+在接口文档中，该功能的请求路径为：/admin/employee/status/{status}，路径参数携带状态值，但同时请求参数为员工 id。
+
+Controller 层：
+
+```java
+@PostMapping("/status/{status}")
+@ApiOperation("启用、禁用员工账号")
+public Result startOrStop(@PathVariable Integer status,Long id){
+    log.info("启用、禁用员工账号状态值与员工 id：{},{}",status,id);
+    employeeService.startOrStop(status,id);//后绪步骤定义
+    return Result.success();
+}
+```
+
+Service 层：
+
+通过员工 id 作为条件对员工的 status 字段进行修改，1 为启用，0 为禁用
+
+```java
+@Override
+public void startOrStop(Integer status, Long id) {
+    Employee employee = Employee.builder()
+            .status(status)
+            .id(id)
+            .build();
+    employeeMapper.update(employee);
+}
+```
+
+****
+## 2. 测试
+
+在 API 管理界面输入对应的 status 和 员工 id，发送请求，返回：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": null
+}
+```
+
+但目前还没有设置员工登录时的状态判断，后续添加。
+
+****
+# 六、编辑员工信息
+
+在员工管理列表页面点击 "编辑" 按钮，跳转到编辑页面，在编辑页面回显员工信息并进行修改，最后点击 "保存" 按钮完成编辑操作。所以该编辑操作包含一个根据 id 查询的功能，
+点击 "编辑" 按钮时应该触发查询操作，点击 "保存" 按钮时完成修改操作，因为是修改操作，所以一般是通过表单提交，则传递的表单数据是 json 对象，即修改后的员工信息。
+
+controller 层：
+
+```java
+@GetMapping("/{id}")
+@Operation("根据id查询员工信息")
+public Result<Employee> getById(@PathVariable Long id){
+    Employee employee = employeeService.getById(id);
+    return Result.success(employee);
+}
+```
+
+```java
+@PutMapping
+@Operation(summary = "编辑员工信息")
+public Result update(@RequestBody EmployeeDTO employeeDTO){
+    log.info("编辑员工信息：{}", employeeDTO);
+    employeeService.update(employeeDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+```java
+@Override
+public Employee getById(Long id) {
+    Employee employee = employeeMapper.getById(id);
+    employee.setPassword("****");
+    return employee;
+}
+```
+
+```java
+@Override
+public void update(EmployeeDTO employeeDTO) {
+    Employee employee = new Employee();
+    BeanUtils.copyProperties(employeeDTO, employee);
+    employee.setUpdateTime(LocalDateTime.now());
+    employee.setUpdateUser(BaseContext.getCurrentId());
+    employeeMapper.update(employee);
+}
+```
+
+****
+## 2. 测试
+
+先查询：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": {
+    "id": 2,
+    "username": "zhangsan",
+    "name": "张三",
+    "password": "****",
+    "phone": "16676538878",
+    "sex": "1",
+    "idNumber": "647262548991901241",
+    "status": 1,
+    "createTime": "2025-07-10 22:16:19",
+    "updateTime": "2025-07-10 22:16:19",
+    "createUser": 10,
+    "updateUser": 10
+  }
+}
+```
+
+再修改：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": null
+}
+```
+
+****
+# 七、分类模块功能
+
+## 1. 功能实现
+
+后台系统中可以管理分类信息，分类包括两种类型，分别是菜品分类和套餐分类：
+
+- 菜品分类：新增菜品分类、菜品分类分页查询、根据 id 删除菜品分类、修改菜品分类、启用禁用菜品分类、分类类型查询
+- 套餐分类同理
+
+[CategoryController](./sky-server/src/main/java/com/sky/controller/admin/CategoryController.java)
+
+****
+# 八、公共字段自动填充
+
+## 1. 分析
+
+在新增员工或者新增菜品分类时需要设置创建时间、创建人、修改时间、修改人等字段，在编辑员工或者编辑菜品分类时需要设置修改时间、修改人等字段。
+这些字段属于公共字段，也就是也就是在系统中很多表中都会有这些字段，如下：
+
+| **序号** | **字段名**  | **含义** | **数据类型** |
+| -------- | ----------- |--------| ------------ |
+| 1        | create_time | 创建时间   | datetime     |
+| 2        | create_user | 创建人 id | bigint       |
+| 3        | update_time | 修改时间   | datetime     |
+| 4        | update_user | 修改人 id | bigint       |
+
+针对于这些字段，当前的赋值方式为将 createTime、updateTime 设置为当前时间，createUser、updateUser 设置为当前登录用户ID；将 updateTime 设置为当前时间，updateUser 设置为当前登录用户 ID。
+这种方式造成了很多冗余的代码，如果后期发生变更，就较难维护。所以可以利用 AOP 切面编程，实现功能增强，来完成公共字段自动填充功能。
+
+****
+## 2. 功能实现
+
+因为当前需要自动填充的公共字段只有 insert 和 update 方法会用到，所以可以自定义一个注解，用来标记需要添加切入点的方法：
+
+```java
+// 自定义注解，用于标识某个方法需要进行功能字段自动填充处理
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface AutoFill {
+    // 数据库操作类型：UPDATE INSERT
+    OperationType value();
+}
+```
+
+该注解的 value 为数据库的操作类型，后续可以通过反射机制拿到这个 value，用来判断需要添加哪些数据。然后就是创建 [AutoFillAspect](./sky-server/src/main/java/com/sky/aspect/AutoFillAspect.java) 类，
+
+```java
+// 获取到当前被拦截的方法上的 @AutoFill 注解中的 value 的值（数据库操作类型）
+MethodSignature signature = (MethodSignature) joinPoint.getSignature(); // 方法签名对象
+AutoFill autoFill = signature.getMethod().getAnnotation(AutoFill.class); // 获得方法上的注解对象
+OperationType operationType = autoFill.value(); // 获得数据库操作类型
+```
+
+JoinPoint 是 Spring AOP 提供的接口，表示当前连接点，通过它可以获取到拦截的方法的相关信息，signature.getMethod() 就相当于反射机制中的 XxxClass.class.getMethod(...)，
+但因为在 AOP 中 Spring 已经通过代理对象获取到了当前执行的方法上下文，所以不需要用到常规的反射机制。
+
+```java
+// 通过反射获取实体的 setter 方法并设置传入的参数类型
+Method setCreateTime = entity.getClass().getDeclaredMethod(AutoFillConstant.SET_CREATE_TIME, LocalDateTime.class);
+Method setCreateUser = entity.getClass().getDeclaredMethod(AutoFillConstant.SET_CREATE_USER, Long.class);
+Method setUpdateTime = entity.getClass().getDeclaredMethod(AutoFillConstant.SET_UPDATE_TIME, LocalDateTime.class);
+Method setUpdateUser = entity.getClass().getDeclaredMethod(AutoFillConstant.SET_UPDATE_USER, Long.class);
+// 通过反射为对象属性赋值
+setCreateTime.invoke(entity, now);
+setCreateUser.invoke(entity, currentId);
+setUpdateTime.invoke(entity, now);
+setUpdateUser.invoke(entity, currentId);
+```
+
+不过想要获取到实体类中的 setter 方法，还是要用到反射机制，通过该实体的方法名获取到对应的方法，然后再提前设置数据，达到自动填充的效果。
+
+****
+# 九、新增菜品
+
+## 1. 分析
+
+后台系统中可以管理菜品信息，通过新增功能来添加一个新的菜品，在添加菜品时需要选择当前菜品所属的菜品分类，并且需要上传菜品图片。新增菜品的方式是通过表单提交，
+填写完表单信息，点击 "保存" 按钮后，会提交该表单的数据到服务端，在服务端中需要接受数据，然后将数据保存至数据库中。这里规定了菜品名称必须是唯一的、
+菜品必须属于某个分类下，不能单独存在、新增菜品时可以根据情况选择菜品的口味、并且每个菜品必须对应一张图片。
+
+****
+## 2. 文件上传
+
+### 2.1 本地存储
+
+上传文件的原始 form 表单，要求表单必须具备以下三点（上传文件页面三要素）：
+
+- 表单必须有 file 域，用于选择要上传的文件
+- 表单提交方式必须为 POST：通常上传的文件会比较大，所以需要使用 POST 提交方式
+- 表单的编码类型 enctype 必须要设置为：multipart/form-data（普通默认的编码格式是不适合传输大型的二进制数据的）
+
+基于以上要求，后端就必须使用 MultipartResolver 来解析该类型的请求体，而请求体中的文件部分会被封装为 MultipartFile 对象，由框架自动注入到你的控制器参数中。
+
+```java
+@PostMapping("/upload")
+public Result upload(MultipartFile file) throws Exception {
+    log.info("上传文件：{}", file);
+    if(!file.isEmpty()){
+      // 生成唯一文件名
+      String originalFilename = file.getOriginalFilename();
+      String extName = originalFilename.substring(originalFilename.lastIndexOf("."));
+      String uniqueFileName = UUID.randomUUID().toString().replace("-", "") + extName;
+      // 拼接完整的文件路径
+      File targetFile = new File(UPLOAD_DIR + uniqueFileName);
+
+      // 如果目标目录不存在，则创建它
+      if (!targetFile.getParentFile().exists()) {
+        targetFile.getParentFile().mkdirs();
+      }
+      // 保存文件
+      file.transferTo(targetFile);
+    }
+    return Result.success();
+}
+```
+
+MultipartFile 常见方法：
+
+- getOriginalFilename()：获取原始文件名
+- transferTo(File dest)：将接收的文件转存到磁盘文件中
+- getSize()：获取文件的大小，单位：字节
+- getBytes()：获取文件内容的字节数组
+- getInputStream()：获取接收到的文件内容的输入流
+
+在默认情况下，文件上传时默认单个文件最大大小为 1M，不过可以在配置文件中进行修改:
+
+```yaml
+spring：
+  servlet:
+    multipart:
+      max-file-size: 10MB # 最大单个文件上传大小
+      max-request-size: 100MB # 单次最大请求文件的大小（包括文件和表单数据）
+```
+
+不过这种本地存储文件的方式存在一些问题：
+
+- 不安全，磁盘如果损坏，所有的文件就会丢失
+- 容量有限，如果存储大量的图片，磁盘空间有限(磁盘不可能无限制扩容)
+- 无法直接访问
+  
+为了解决上述问题，通常有两种解决方案：
+
+- 自己搭建存储服务器，如：fastDFS 、MinIO
+- 使用现成的云服务，如：阿里云，腾讯云，华为云
+
+****
+### 2.2 阿里云 OSS
+
+#### 1. 配置
+
+1. 注册阿里云账户（注册完成后需要实名认证）
+2. 注册完账号之后，登录阿里云
+3. 通过控制台找到对象存储 OSS 服务并开通
+4. 进入到阿里云对象存储的控制台
+5. 点击左侧的 "Bucket列表"，创建一个Bucket
+6. 输入 Bucket 的相关信息（一般只输入存储空间名字，其他默认）
+7. 点击 "AccessKey管理"，进入到管理页面创建 AccessKey
+8. 以管理员身份打开 CMD 命令行，执行如下命令，配置系统的环境变量
+
+```text
+set OSS_ACCESS_KEY_ID=对应生成的ID
+set OSS_ACCESS_KEY_SECRET=对应生成的密钥
+```
+
+9. 执行如下命令，让更改生效
+
+```text
+setx OSS_ACCESS_KEY_ID "%OSS_ACCESS_KEY_ID%"
+setx OSS_ACCESS_KEY_SECRET "%OSS_ACCESS_KEY_SECRET%"
+```
+
+10. 执行如下命令，验证环境变量是否生效
+
+```text
+echo %OSS_ACCESS_KEY_ID%
+echo %OSS_ACCESS_KEY_SECRET%
+```
+
+****
+#### 2. 程序的使用
+
+引入依赖：
+
+```xml
+<dependency>
+    <groupId>com.aliyun.oss</groupId>
+    <artifactId>aliyun-sdk-oss</artifactId>
+    <version>3.17.4</version>
+</dependency>
+<dependency>
+    <groupId>jakarta.xml.bind</groupId>
+    <artifactId>jakarta.xml.bind-api</artifactId>
+    <version>3.0.1</version>
+</dependency>
+<dependency>
+    <groupId>com.sun.activation</groupId>
+    <artifactId>jakarta.activation</artifactId>
+    <version>2.0.1</version>
+</dependency>
+<dependency>
+    <groupId>org.glassfish.jaxb</groupId>
+    <artifactId>jaxb-runtime</artifactId>
+    <version>4.0.3</version>
+</dependency>
+```
+
+上传文件[样例代码](./sky-server/src/test/java/test.java)
+
+在以上代码中，需要替换的内容为：
+- endpoint：阿里云 OSS 中的 bucket 对应的域名
+- bucketName：Bucket 名称
+- objectName：对象名称，在 Bucket 中存储的对象的名称
+- region：bucket 所属区域
+
+****
+#### 3. 集成 OSS
+
+引入阿里云 OSS 上传文件工具类（由官方的示例代码改造而来）：
+
+```java
+@Data
+@Slf4j
+@Component
+@NoArgsConstructor
+@AllArgsConstructor
+public class AliOssUtil {
+
+  @Autowired
+  private AliOssProperties aliOssProperties;
+  
+  public String upload(byte[] content, String originalFilename) throws Exception {
+
+    String endpoint = aliOssProperties.getEndpoint();
+    String bucketName = aliOssProperties.getBucketName();
+    String region = aliOssProperties.getRegion();
+      
+    // 从环境变量中获取访问凭证，请确保已设置环境变量 OSS_ACCESS_KEY_ID 和 OSS_ACCESS_KEY_SECRET
+    EnvironmentVariableCredentialsProvider credentialsProvider = CredentialsProviderFactory.newEnvironmentVariableCredentialsProvider();
+    // 填写 Object 完整路径，例如 202507/1.png。Object 完整路径中不能包含 Bucket 名称。
+    // 获取当前系统日期的字符串,格式为 yyyy/MM
+    String dir = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM"));
+    // 生成一个新的不重复的文件名
+    String newFileName = UUID.randomUUID().toString().replace("-", "") + originalFilename.substring(originalFilename.lastIndexOf("."));
+    String objectName = dir + "/" + newFileName;
+
+    // 创建 OSSClient 实例。
+    ClientBuilderConfiguration clientBuilderConfiguration = new ClientBuilderConfiguration();
+    clientBuilderConfiguration.setSignatureVersion(SignVersion.V4);
+    OSS ossClient = OSSClientBuilder.create()
+            .endpoint(endpoint)
+            .credentialsProvider(credentialsProvider)
+            .clientConfiguration(clientBuilderConfiguration)
+            .region(region)
+            .build();
+
+    try {
+      ossClient.putObject(bucketName, objectName, new ByteArrayInputStream(content));
+    } finally {
+      ossClient.shutdown();
+    }
+    // 因为前端页面最终通过返回的 url 访问图片，所以要把具体的 url 拼接起来
+    // endpoint：https://oss-cn-beijing.aliyuncs.com
+    // 例如：https://cell-sky-take-out.oss-cn-beijing.aliyuncs.com/2025/07/cd6a7db2161d472783fca141f7395f8b.jpg
+    return endpoint.split("//")[0] + "//" + bucketName + "." + endpoint.split("//")[1] + "/" + objectName;
+  }
+}
+```
+
+在新增菜品的时候，上传菜品的图像，而之所以需要上传菜品的图像，是因为需要在系统页面当中访问并展示菜品的图像。而要想完成这个操作，需要做两件事：
+
+1. 需要上传菜品的图像，并把图像保存起来（存储到阿里云 OSS）
+2. 访问菜品图像（通过图像在阿里云 OSS 的存储地址访问图像）
+   - OSS中的每一个文件都会分配一个访问的url，通过这个url就可以访问到存储在阿里云上的图片。所以需要把url返回给前端，这样前端就可以通过 url 获取到图像。
+
+****
+#### 4. 测试
+
+在 API 管理页面，选择上传的文件，发送后，返回：
+
+```json
+{
+  "code": 1,
+  "msg": null,
+  "data": "https://cell-sky-take-out.oss-cn-beijing.aliyuncs.com/2025/07/cd6a7db2161d472783fca141f7395f8b.jpg"
+}
+```
+
+****
+
+
+
+
+
+
 
 
