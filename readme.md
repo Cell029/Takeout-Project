@@ -1199,6 +1199,565 @@ public class AliOssUtil {
 ```
 
 ****
+## 3. 新增菜品
+
+Controller 层：
+
+```java
+@PostMapping
+@Operation(summary = "新增菜品")
+public Result save(@RequestBody DishDTO dishDTO) {
+    log.info("新增菜品：{}", dishDTO);
+    dishService.saveWithFlavor(dishDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+因为新增菜品时要连带口味一起选择，而口味是一张新的表，它们靠菜品的 ID 作为逻辑外键达到相互关联的效果，所以插入新的菜品时需要获取到该菜品的主键 ID，
+而前端选择口味时，将这些口味信息封装进 DishDTO 中了，因为可能选择多个口味，所以通过一个 List 集合接收，所以再把这些口味信息同时插入到 dish_flavor 表中即可。
+
+```java
+@Override
+public void saveWithFlavor(DishDTO dishDTO) {
+    Dish dish = new Dish();
+    BeanUtils.copyProperties(dishDTO, dish);
+    // 向菜品表插入 1 条数据
+    dishMapper.insert(dish);
+    // 获取 insert 语句生成的主键值
+    Long dishId = dish.getId();
+    List<DishFlavor> flavors = dishDTO.getFlavors();
+    if (flavors != null && !flavors.isEmpty()) {
+        flavors.forEach(dishFlavor -> dishFlavor.setDishId(dishId));
+        // 向口味表插入 n 条数据
+        dishFlavorMapper.insertBatch(flavors);
+    }
+}
+```
+
+Mapper 层：
+
+通过使用 useGeneratedKeys="true" 表示要获取到插入数据时生成的主键，keyProperty="id" 则是将主键赋值给 dish 表的 id。
+
+```sql
+<insert id="insert" useGeneratedKeys="true" keyProperty="id">
+    insert into dish (name, category_id, price, image, description, create_time, update_time, create_user,update_user, status)
+        values 
+    (#{name}, #{categoryId}, #{price}, #{image}, #{description}, #{createTime}, #{updateTime}, #{createUser},#{updateUser}, #{status})
+</insert>
+```
+
+因为 Service 层传递过来的参数是一个 List 类型的 flavors，所以使用批量插入语句将多个 DishFlavor 对象插入 dish_flavor 表中。
+
+```sql
+<insert id="insertBatch">
+    insert into dish_flavor (dish_id, name, value) VALUES
+    <foreach collection="flavors" item="df" separator=",">
+        (#{df.dishId},#{df.name},#{df.value})
+    </foreach>
+</insert>
+```
+
+****
+## 4. 菜品分页查询
+
+在菜品列表展示时，除了菜品的基本信息（名称、售价、售卖状态、最后操作时间）外，还有两个字段较为特殊，第一个是图片字段，从数据库查询出来的仅仅是图片的名字，
+图片要想在表格中回显展示出来，就需要下载这个图片，所以之前上传图片后返回给前端的是图片的 url。第二个是菜品分类，这里展示的是分类名称，而不是分类 ID，此时就需要根据菜品的分类 ID，去分类表中查询分类信息，
+然后在页面展示。所以封装一个 DishVO，将需要的数据封装进该 VO 对象，然后再返回给前端。
+
+```sql
+<select id="pageQuery" resultType="com.sky.vo.DishVO">
+  select d.* , c.name as categoryName from dish d left outer join category c on d.category_id = c.id
+  <where>
+      <if test="name != null">
+          and d.name like concat('%',#{name},'%')
+      </if>
+      <if test="categoryId != null">
+          and d.category_id = #{categoryId}
+      </if>
+      <if test="status != null">
+          and d.status = #{status}
+      </if>
+  </where>
+  order by d.create_time desc
+</select>
+```
+
+****
+## 5. 删除菜品
+
+可以一次删除一个菜品，也可以批量删除菜品，但起售中的菜品不能删除，被套餐关联的菜品不能删除，删除菜品后，关联的口味数据也需要删除掉。所以删除操作涉及到了
+dish、dish_flavor、setmeal_dish（套餐和菜品的关系表）三个表。
+
+Controller 层：
+
+不管是单个删除还是批量删除，都可以直接通过批量删除的方式，所以只需要写一个删除逻辑即可。
+
+```java
+@DeleteMapping
+@Operation(summary = "菜品批量删除")
+public Result delete(@RequestParam List<Long> ids) {
+  log.info("菜品批量删除：{}", ids);
+  dishService.deleteBatch(ids);
+  return Result.success();
+}
+```
+
+Service 层：
+
+因为起售中和与套餐关联的菜品不能删除，所以在删除前需要进行一次查询判断，通过查询该菜品的 status 和是否能通过该菜品的 id 查询到套餐的数据来进行判断。
+最后再根据勾选中的菜品 id 进行菜品和对应口味的删除即可。
+
+```java
+@Override
+@Transactional
+public void deleteBatch(List<Long> ids) {
+    // 判断当前菜品是否能够删除（是否存在起售中的菜品）
+    for (Long id : ids) {
+        Dish dish = dishMapper.getById(id);
+        if (Objects.equals(dish.getStatus(), StatusConstant.ENABLE)) {
+            // 当前菜品处于起售中，不能删除
+            throw new DeletionNotAllowedException(MessageConstant.DISH_ON_SALE);
+        }
+    }
+    // 判断当前菜品是否能够删除（是否被套餐关联）
+    List<Long> setmealIds = setmealDishMapper.getSetmealIdsByDishIds(ids);
+    if (setmealIds != null && !setmealIds.isEmpty()) {
+        // 当前菜品被套餐关联了，不能删除
+        throw new DeletionNotAllowedException(MessageConstant.DISH_BE_RELATED_BY_SETMEAL);
+    }
+    // 根据菜品 id 集合删除菜品表中的菜品数据
+    dishMapper.deleteByIds(ids);
+    // 根据菜品 id 集合删除菜品关联的口味数据
+    dishFlavorMapper.deleteByDishIds(ids);
+}
+```
+
+Mapper 层：
+
+使用动态拼接的批量删除方式
+
+```sql
+<insert id="insertBatch">
+    insert into dish_flavor (dish_id, name, value) VALUES
+    <foreach collection="flavors" item="df" separator=",">
+        (#{df.dishId},#{df.name},#{df.value})
+    </foreach>
+</insert>
+```
+
+****
+## 6. 修改菜品
+
+在菜品管理列表页面点击修改按钮，应该显示菜品的相关信息，所以涉及根据 id 查询的操作。
+
+Controller 层：
+
+```java
+@GetMapping("/{id}")
+@Operation(summary = "根据id查询菜品")
+public Result<DishVO> getById(@PathVariable Long id) {
+    log.info("根据id查询菜品：{}", id);
+    DishVO dishVO = dishService.getByIdWithFlavor(id);
+    return Result.success(dishVO);
+}
+```
+
+```java
+@PutMapping
+@Operation(summary = "修改菜品")
+public Result update(@RequestBody DishDTO dishDTO) {
+    log.info("修改菜品：{}", dishDTO);
+    dishService.updateWithFlavor(dishDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+因为前端的展示内容是一个整合项，所以还是返回一个 DishVO 对象
+
+```java
+@Override
+public DishVO getByIdWithFlavor(Long id) {
+    // 根据 id 查询菜品数据
+    Dish dish = dishMapper.getById(id);
+    // 根据菜品 id 查询口味数据
+    List<DishFlavor> dishFlavors = dishFlavorMapper.getByDishId(id);
+    // 将查询到的数据封装到 VO
+    DishVO dishVO = new DishVO();
+    BeanUtils.copyProperties(dish, dishVO);
+    dishVO.setFlavors(dishFlavors);
+    return dishVO;
+}
+```
+
+修改菜品较为简单，直接通过 update 修改相关信息即可，但是口味的修改较为复杂，因为可能涉及多个删除或添加口味，所以可以在执行修改操作时，直接把所有的口味全删除，
+然后再把表单提交的口味添加即可。
+
+```java
+@Override
+public void updateWithFlavor(DishDTO dishDTO) {
+    Dish dish = new Dish();
+    BeanUtils.copyProperties(dishDTO, dish);
+    // 修改菜品表基本信息
+    dishMapper.update(dish);
+    // 删除原有的口味数据
+    dishFlavorMapper.deleteByDishId(dishDTO.getId());
+    // 重新插入口味数据
+    List<DishFlavor> flavors = dishDTO.getFlavors();
+    if (flavors != null && !flavors.isEmpty()) {
+        flavors.forEach(dishFlavor -> dishFlavor.setDishId(dishDTO.getId()));
+        // 向口味表插入 n 条数据
+        dishFlavorMapper.insertBatch(flavors);
+    }
+}
+```
+****
+## 7. 菜品启售、停售功能
+
+该功能与员工启用、禁用类似。
+
+Controller 层：
+
+```java
+@PostMapping("/status/{status}")
+@Operation(summary = "起售、停售菜品")
+public Result startOrStop(@PathVariable Integer status, Long id) {
+    log.info("起售、停售菜品：{},{}", status, id);
+    dishService.startOrStop(status, id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+```java
+@Override
+public void startOrStop(Integer status, Long id) {
+    Dish dish = Dish.builder()
+            .status(status)
+            .id(id)
+            .build();
+    dishMapper.update(dish);
+}
+```
+
+****
+# 十、套餐管理
+
+## 1. 新增套餐
+
+套餐名称唯一，必须属于某个分类，必须包含菜品，名称、分类、价格、图片为必填项，添加菜品窗口需要根据分类类型来展示菜品，新增的套餐默认为停售状态。
+所以在添加套餐时需要用到通过菜品分类 id 或菜品名查询对应的菜品信息。
+
+```java
+@GetMapping("/list")
+@Operation(summary = "根据分类id查询菜品")
+public Result<List<Dish>> list(Long categoryId){
+    List<Dish> list = dishService.list(categoryId);
+    return Result.success(list);
+}
+
+@Override
+public List<Dish> list(Long categoryId) {
+  Dish dish = Dish.builder()
+          .categoryId(categoryId)
+          .status(StatusConstant.ENABLE)
+          .build();
+  return dishMapper.list(dish);
+}
+```
+
+新增套餐：
+
+Controller 层：
+
+因为新增套餐的同时需要选择归属该套餐的菜品，所以新增操作中需要让这些菜品关联到 setmeal 表，所以放在同一个 service 方法中。而前端页面提交的表单数据不止包含 setmeal 表的内容，
+所以封装了个 SetmealDTO 来接受所有的数据。
+
+```java
+@PostMapping
+@Operation(summary = "新增套餐")
+public Result save(@RequestBody SetmealDTO setmealDTO) {
+    setmealService.saveWithDish(setmealDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+从 SetmealDTO 对象中获取 setmeal 表中的内容，然后插入 setmeal 表，然后通过插入 setmeal 表时生成的套餐 Id 赋值给前端选择的那些菜品，所以要使用一个 setmeal_dish 关联表，
+通过套餐 Id 关联菜品 Id，SetmealDTO 中有 SetmealDish 类型的集合，就是用来封装菜品信息的，然后把这些 SetmealDish 添加进 setmeal_dish 表中。
+
+```java
+@Override
+public void saveWithDish(SetmealDTO setmealDTO) {
+    Setmeal setmeal = new Setmeal();
+    BeanUtils.copyProperties(setmealDTO, setmeal);
+    // 向套餐表中提交数据
+    setmealMapper.insert(setmeal);
+    // 获取生成的套餐 id
+    Long setmealId = setmeal.getId();
+    // 获取要添加到套餐的菜品信息
+    List<SetmealDish> setmealDishes = setmealDTO.getSetmealDishes();
+    // 给这些要添加到套餐中的菜品绑定套餐 id
+    setmealDishes.forEach(setmealDish -> setmealDish.setSetmealId(setmealId));
+    // 保存套餐和菜品的关联关系
+    setmealDishMapper.insertBatch(setmealDishes);
+}
+```
+
+****
+## 2. 套餐分页查询
+
+可以根据需要，按照套餐名称、分类、售卖状态进行查询。
+
+```java
+@GetMapping("/page")
+@Operation(summary = "套餐分页查询")
+public Result<PageResult> page(SetmealPageQueryDTO setmealPageQueryDTO) {
+    PageResult pageResult = setmealService.pageQuery(setmealPageQueryDTO);
+    return Result.success(pageResult);
+}
+
+@Override
+public PageResult pageQuery(SetmealPageQueryDTO setmealPageQueryDTO) {
+  PageHelper.startPage(setmealPageQueryDTO.getPage(), setmealPageQueryDTO.getPageSize());
+  Page<SetmealVO> page = setmealMapper.pageQuery(setmealPageQueryDTO);
+  return new PageResult(page.getTotal(), page.getResult());
+}
+```
+
+```sql
+<select id="pageQuery" resultType="com.sky.vo.SetmealVO">
+    select s.*,c.name categoryName from setmeal s
+    left join category c on s.category_id = c.id
+    <where>
+        <if test="name != null">
+            and s.name like concat('%',#{name},'%')
+        </if>
+        <if test="status != null">
+            and s.status = #{status}
+        </if>
+        <if test="categoryId != null">
+            and s.category_id = #{categoryId}
+        </if>
+    </where>
+    order by s.create_time desc
+</select>
+```
+
+****
+## 3. 删除套餐
+
+可以一次删除一个套餐，也可以批量删除套餐，但起售中的套餐不能删除。和删除菜品类似，都是利用批量删除达到两种效果。
+
+```java
+@DeleteMapping
+@Operation(summary = "批量删除套餐")
+public Result delete(@RequestParam List<Long> ids){
+    setmealService.deleteBatch(ids);
+    return Result.success();
+}
+
+@Override
+@Transactional
+public void deleteBatch(List<Long> ids) {
+  ids.forEach(id -> {
+    Setmeal setmeal = setmealMapper.getById(id);
+    if (setmeal.getStatus() == StatusConstant.ENABLE) {
+      // 起售中的套餐不能删除
+      throw new DeletionNotAllowedException(MessageConstant.SETMEAL_ON_SALE);
+    }
+  });
+  // 删除套餐表中的数据
+  setmealMapper.deleteByIds(ids);
+  // 删除 setmeal_dish 表中的数据
+  setmealDishMapper.deleteByIds(ids);
+}
+```
+
+****
+## 4. 修改套餐
+
+点击 "修改" 按钮后需要显示该套餐的信息，所以会用到根据 id 查询套餐信息和关联的菜品信息。
+
+Controller 层：
+
+```java
+@GetMapping("/{id}")
+@Operation(summary = "根据套餐 id 查询套餐")
+public Result<SetmealVO> getById(@PathVariable Long id) {
+    SetmealVO setmealVO = setmealService.getById(id);
+    return Result.success(setmealVO);
+}
+
+@PutMapping
+@Operation(summary = "修改套餐")
+public Result update(@RequestBody SetmealDTO setmealDTO) {
+    setmealService.update(setmealDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+这里页和修改菜品类似，都是先删除较为难修改的数据，然后再统一新增
+
+```java
+@Override
+public SetmealVO getById(Long id) {
+    Setmeal setmeal = setmealMapper.getById(id);
+    List<SetmealDish> setmealDishes = setmealDishMapper.getBySetmealId(id);
+    SetmealVO setmealVO = new SetmealVO();
+    BeanUtils.copyProperties(setmeal, setmealVO);
+    setmealVO.setSetmealDishes(setmealDishes);
+    return setmealVO;
+}
+
+@Override
+public void update(SetmealDTO setmealDTO) {
+    Setmeal setmeal = new Setmeal();
+    BeanUtils.copyProperties(setmealDTO, setmeal);
+    // 修改 setmeal 表
+    setmealMapper.update(setmeal);
+    // 获取套餐 id
+    Long setmealId = setmealDTO.getId();
+    // 删除该套餐中的 setmeal_dish 表中的内容
+    setmealDishMapper.deleteByIds(Collections.singletonList(setmealId));
+    // 获取要添加到套餐的菜品信息
+    List<SetmealDish> setmealDishes = setmealDTO.getSetmealDishes();
+    // 给这些要添加到套餐中的菜品绑定套餐 id
+    setmealDishes.forEach(setmealDish -> setmealDish.setSetmealId(setmealId));
+    // 新增对应的菜品到 setmeal_dish
+    setmealDishMapper.insertBatch(setmealDishes);
+}
+```
+
+****
+## 5. 起售、停售套餐
+
+如果套餐内包含停售的菜品，则不能起售。
+
+Controller 层：
+
+```java
+@PostMapping("/status/{status}")
+@Operation(summary = "套餐起售、停售")
+public Result startOrStop(@PathVariable Integer status, Long id){
+    log.info("起售、停售套餐：{},{}", status, id);
+    setmealService.startOrStop(status, id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+通过套餐 id 查询 setmeal_dish 表中的数据，获取关联的所有菜品的 id，然后依次遍历获取它们对应的 status，经过判断后决定是否可以起售（新增套餐默认停售状态）
+
+```java
+@Override
+public void startOrStop(Integer status, Long id) {
+    // 根据套餐 id 查询当前套餐包含的菜品中的 status 是否有为 0 的
+    List<SetmealDish> setmealDishes = setmealDishMapper.getBySetmealId(id);
+    setmealDishes.forEach(setmealDish -> {
+        if (Objects.equals(dishMapper.getById(setmealDish.getDishId()).getStatus(), StatusConstant.DISABLE)) {
+            throw new SetmealEnableFailedException(MessageConstant.SETMEAL_ENABLE_FAILED);
+        }
+    });
+    // 菜品的 status 全为 1，则正常起售
+    Setmeal setmeal = Setmeal.builder()
+            .status(status)
+            .id(id)
+            .build();
+    setmealMapper.update(setmeal);
+}
+```
+
+****
+# 十一、店铺营业状态设置
+
+## 1. 引入 redis
+
+配置 yaml 文件：
+
+```yaml
+spring:
+  data:
+    redis:
+      host: ${sky.redis.host}
+      port: ${sky.redis.port}
+      password: ${sky.redis.password}
+      database: ${sky.redis.database}
+```
+
+```yaml
+sky:
+  redis:
+    host: localhost
+    port: 6379
+    password: 123
+    database: 10
+```
+
+编写配置类，创建 RedisTemplate 对象:
+
+```java
+@Configuration
+@Slf4j
+public class RedisConfiguration {
+    @Bean
+    public RedisTemplate redisTemplate(RedisConnectionFactory redisConnectionFactory){
+        log.info("开始创建redis模板对象...");
+        RedisTemplate redisTemplate = new RedisTemplate();
+        // 设置 redis 的连接工厂对象
+        redisTemplate.setConnectionFactory(redisConnectionFactory);
+        // 设置 redis key 的序列化器
+        redisTemplate.setKeySerializer(new StringRedisSerializer());
+        return redisTemplate;
+    }
+}
+```
+
+当前配置类不是必须的，因为 SpringBoot 框架会自动装配 RedisTemplate 对象，但是默认的 key 序列化器为 JdkSerializationRedisSerializer，
+会导致存到 Redis 中后的数据和原始数据有差别，所以设置为 StringRedisSerializer 序列化器。如果只是操纵字符串类型的，也可以直接使用 StringRedisTemplate。
+
+****
+## 2. 设置店铺状态
+
+Controller 层：
+
+直接将店铺状态值 status 存入 redis 中
+
+```java
+@PutMapping("/{status}")
+@Operation(summary = "设置店铺的营业状态")
+public Result setStatus(@PathVariable Integer status){
+    log.info("设置店铺的营业状态为：{}",status == 1 ? "营业中" : "打烊中");
+    stringRedisTemplate.opsForValue().set(KEY, String.valueOf(status));
+    return Result.success();
+}
+
+@GetMapping("/status")
+@Operation(summary = "获取店铺的营业状态")
+public Result<Integer> getStatus(){
+    int status = Integer.parseInt(Objects.requireNonNull(stringRedisTemplate.opsForValue().get(KEY)));
+    log.info("获取到店铺的营业状态为：{}",status == 1 ? "营业中" : "打烊中");
+    return Result.success(status);
+}
+```
+
+通过接口文档测试后，在 redis 中查询 key
+
+```redis
+127.0.0.1:6379[10]> get SHOP_STATUS
+"1"
+```
+
+****
+
 
 
 
