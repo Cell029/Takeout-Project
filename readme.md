@@ -1757,6 +1757,645 @@ public Result<Integer> getStatus(){
 ```
 
 ****
+# 十二、微信登录、商品浏览
+
+## 1. HttpClient
+
+Apache HttpClient 是 Apache 提供的一个强大、灵活、功能齐全的 HTTP 客户端工具库，常用于 Java 后端系统中进行 HTTP 通信，支持连接池、代理、认证、会话保持等高级功能。
+用来发送 HTTP 请求并接收响应数据，以及管理连接等。当我们在使用扫描支付、查看地图、获取验证码、查看天气等功能时，
+应用程序本身并未实现这些功能，都是在应用程序里访问提供这些功能的服务，而访问这些服务需要发送 HTTP 请求，并且接收服务端返回的响应数据，
+这些可通过 HttpClient 来实现。
+
+HttpClient 的核心组件：
+
+- HttpClient：Http 客户端对象类型，使用该类型对象可发起 Http 请求。
+- HttpClients：可认为是构建器，可创建 HttpClient 对象。
+- CloseableHttpClient：实现类，实现了 HttpClient 接口。
+- HttpGet：Get 方式请求类型。
+- HttpPost：Post 方式请求类型。
+
+HttpClient 发送请求步骤：
+
+1. 创建 HttpClient 对象
+2. 创建 Http 请求对象
+3. 调用 HttpClient 的 execute 方法发送请求
+
+GET 方式请求：
+
+实现步骤：
+
+1. 创建 HttpClient 对象
+2. 创建请求对象
+3. 发送请求，接受响应结果
+4. 解析结果
+5. 关闭资源
+
+```java
+@Test
+public void testGET() throws Exception{
+    // 创建 httpclient 对象
+    CloseableHttpClient httpClient = HttpClients.createDefault();
+    // 创建请求对象
+    HttpGet httpGet = new HttpGet("http://localhost:8080/user/shop/status");
+    // 发送请求，接受响应结果
+    CloseableHttpResponse response = httpClient.execute(httpGet);
+    // 获取服务端返回的状态码
+    int statusCode = response.getStatusLine().getStatusCode();
+    System.out.println("服务端返回的状态码为：" + statusCode);
+
+    HttpEntity entity = response.getEntity();
+    String body = EntityUtils.toString(entity);
+    System.out.println("服务端返回的数据为：" + body);
+    // 关闭资源
+    response.close();
+    httpClient.close();
+}
+```
+
+输出结果：
+
+```text
+服务端返回的状态码为：200
+服务端返回的数据为：{"code":1,"msg":null,"data":1}
+```
+
+POST 方式请求：
+
+实现步骤：
+
+1. 创建 HttpClient 对象
+2. 创建请求对象
+3. 发送请求，接收响应结果
+4. 解析响应结果
+5. 关闭资源
+
+POST 请求整体与 GET 请求类似，只是多了个请求参数
+
+```java
+@Test
+public void testPOST() throws Exception{
+    // 创建 httpclient 对象
+    CloseableHttpClient httpClient = HttpClients.createDefault();
+    // 创建请求对象
+    HttpPost httpPost = new HttpPost("http://localhost:8080/admin/employee/login");
+    JSONObject jsonObject = new JSONObject();
+    jsonObject.put("username","admin");
+    jsonObject.put("password","123456");
+    StringEntity entity = new StringEntity(jsonObject.toString());
+    // 指定请求编码方式
+    entity.setContentEncoding("utf-8");
+    // 数据格式
+    entity.setContentType("application/json");
+    httpPost.setEntity(entity);
+    // 发送请求
+    CloseableHttpResponse response = httpClient.execute(httpPost);
+    // 解析返回结果
+    int statusCode = response.getStatusLine().getStatusCode();
+    System.out.println("响应码为：" + statusCode);
+    HttpEntity entity1 = response.getEntity();
+    String body = EntityUtils.toString(entity1);
+    System.out.println("响应数据为：" + body);
+    // 关闭资源
+    response.close();
+    httpClient.close();
+}
+```
+
+输出结果：
+
+```text
+响应码为：200
+响应数据为：{"code":1,"msg":null,"data":{"id":1,"userName":"admin","name":"管理员","token":"eyJhbGciOiJIUzI1NiJ9.eyJlbXBJZCI6MSwiZXhwIjoxNzUyNDgzNTM4fQ.0he-qhWEXzDdbmcfJSMGBF4ySgg8OoRy3KFnJyn6i_w"}}
+```
+
+****
+## 2. 微信小程序开发
+
+### 2.1 小程序目录结构
+
+小程序包含一个描述整体程序的 app 和多个描述各自页面的 page。一个小程序主体部分由三个文件组成，必须放在项目的根目录：
+
+- app.js：必须存在，主要存放小程序的逻辑代码
+- app.json：必须存在，小程序配置文件，主要存放小程序的公共配置
+- app.wxss：非必须存在，主要存放小程序公共样式表，类似于前端的 CSS 样式
+
+每个小程序页面主要由四个文件组成：
+
+- index.js：必须存在，存放页面业务逻辑代码，编写的 js 代码。
+- index.json：非必须，存放页面相关的配置。
+- index.wxml：必须存在，存放页面结构，主要是做页面布局，页面效果展示的，类似于 HTML 页面。
+- index.wxss：非必须，存放页面样式表，相当于 CSS 文件。
+
+****
+### 2.2 编写和编译小程序
+
+进入到 index.wxml，编写页面布局：
+
+```js
+<!--index.wxml-->
+<navigation-bar title="Weixin" back="{{false}}" color="black" background="#FFF"></navigation-bar>
+<scroll-view class="scrollarea" scroll-y type="list">
+  <view>
+    <view class="container">{{msg}}</view>
+    <view>
+      <button bindtap="getUserInfo" type="primary">获取用户信息</button>
+      <image style="width:100px;height:100px;" src="{{url}}"></image>
+      {{nickName}}
+    </view>
+    <view>
+      <button bindtap="wxLogin" type="warn">微信登陆</button>
+      授权码：{{code}}
+    </view>
+    <view>
+      <button bindtap="sendRequest" type="warn">发送请求</button>
+      响应结果:{{result}}
+     </view>
+  </view>
+</scroll-view>
+```
+
+进入到 index.js，编写业务逻辑代码:
+
+```js
+// index.js
+Page({
+  data:{
+    msg:'hello world!',
+    nickName:'',
+    url:'',
+    code:'',
+    result:''
+  },
+  // 获取微信用户的头像和昵称
+  getUserInfo() {
+    // 小程序内置方法，获取当前用户信息
+    wx.getUserProfile({
+      desc: '获取用户信息',
+      success:(res) => {
+        // res 就是返回的获取到的当前用户的信息
+        console.log(res.userInfo)
+        // 为数据赋值
+        this.setData({
+          nickName: res.userInfo.nickName,
+          url: res.userInfo.avatarUrl
+        })
+      }
+    })
+  },
+
+  // 微信登录，获取微信的授权码
+  wxLogin(){
+    wx.login({
+        success:(res)=>{
+            console.log("授权码："+res.code)
+            this.setData({
+              code:res.code
+            })
+        }
+    })
+  },
+
+  // 发送请求
+  sendRequest(){
+    wx.request({
+      url:'http://localhost:8080/user/shop/status',
+      method:'GET',
+      success:(res)=>{
+          console.log("响应结果："+res.data.data)
+        this.setData({
+          result:res.data.data
+        })
+      }
+    })
+  }
+})
+```
+
+测试时需要设置不校验合法域名，若不勾选，请求发送会失败。
+
+****
+## 3. 微信登录
+
+微信登录流程：
+
+1. 小程序端，调用 wx.login() 获取 code，就是授权码。
+2. 小程序端，调用 wx.request() 发送请求并携带 code，请求开发者服务器（自己编写的后端服务）。
+3. 开发者服务端，通过 HttpClient 向微信接口服务发送请求，并携带 appId+appsecret+code 三个参数。
+4. 开发者服务端，接收微信接口服务返回的数据，session_key+openid 等，openid 是微信用户的唯一标识。
+5. 开发者服务端，自定义登录态，生成令牌（token）和 openid 等数据返回给小程序端，方便后绪请求身份校验。
+6. 小程序端，收到自定义登录态，存储 storage。
+7. 小程序端，后绪通过 wx.request() 发起业务请求时，携带 token。
+8. 开发者服务端，收到请求后，通过携带的 token，解析当前登录用户的 id。
+9. 开发者服务端，身份校验通过后，继续相关的业务逻辑处理，最终返回业务数据。
+
+- wx.login(Object object)
+
+调用接口获取登录凭证（code）。通过凭证进而换取用户登录态信息，包括用户在当前小程序的唯一标识（openid）、微信开放平台账号下的唯一标识（unionid，
+若当前小程序已绑定到微信开放平台账号）及本次登录的会话密钥（session_key）等。用户数据的加解密通讯需要依赖会话密钥完成。
+
+```js
+wx.login({
+  success (res) {
+    if (res.code) {
+      // 发起网络请求
+      wx.request({
+        url: 'https://example.com/onLogin',
+        data: {
+          code: res.code
+        }
+      })
+    } else {
+      console.log('登录失败！' + res.errMsg)
+    }
+  }
+})
+```
+
+- 调用 auth.code2Session 接口，换取 用户唯一标识 OpenID 、 用户在微信开放平台账号下的唯一标识UnionID（若当前小程序已绑定到微信开放平台账号） 和 会话密钥 session_key。
+
+登录凭证校验，通过 wx.login 接口获得临时登录凭证 code 后传到开发者服务器调用此接口完成登录流程。调用方式：
+
+```http request
+GET https://api.weixin.qq.com/sns/jscode2session 
+```
+
+请求参数：
+
+| 属性       | 类型   | 必填 | 说明                             |
+|------------|--------|------|--------------------------------|
+| appid      | string | 是   | 小程序 appId                      |
+| secret     | string | 是   | 小程序 appSecret                  |
+| js_code    | string | 是   | 登录时获取的 code，可通过 wx.login 获取    |
+| grant_type | string | 是   | 授权类型，此处只需填写 authorization_code |
+
+返回参数：
+
+| 属性        | 类型   | 说明                                                         |
+|-------------|--------|--------------------------------------------------------------|
+| session_key | string | 会话密钥                                                     |
+| unionid     | string | 用户在开放平台的唯一标识符，若当前小程序已绑定到微信开放平台帐号下会返回 |
+| errmsg      | string | 错误信息，请求失败时返回                                     |
+| openid      | string | 用户唯一标识                                                 |
+| errcode     | int32  | 错误码，请求失败时返回                                       |
+
+通过模拟发送请求：
+
+```http request
+https://api.weixin.qq.com/sns/jscode2session?appid=wxb401fa14d7567036&secret=10fd5727e6f4c260e9765c6e346d0aeb&js_code=0c3450100mqXBU1RaH000kD0HR34501o&grant_type=authorization_code
+```
+
+等到返回结果：
+
+```text
+{
+    "session_key": "eDQp/3XSaPb+XT1CJuHFHQ==",
+    "openid": "oEi1JvnOyN6rLbR3Q1ligCJd5nPc"
+}
+```
+
+因为一个授权码（code）只能使用一次，所以再次发送相同的请求就会报错
+
+```text
+{
+    "errcode": 40163,
+    "errmsg": "code been used, rid: 6874c752-0dcac9e8-687e7832"
+}
+```
+
+****
+## 4. 需求分析
+
+用户进入到小程序的时候，微信授权登录之后才能点餐，并且需要获取当前微信用户的相关信息，比如昵称、头像等，这样才能够进入到小程序进行下单操作。
+由于是基于微信登录来实现小程序的登录功能，没有采用传统账户密码登录的方式，所以如果是第一次使用小程序来点餐，那就是一个新用户，
+需要把这个新的用户保存到数据库当中完成自动注册，而该用户不能直接使用 employee 表，因为从小程序登录的话会携带 openid，并且需要存放头像，
+而 employee 表中没有这些字段，所以使用新的 user 表来存储微信小程序登录的新用户。
+
+通过微信登录的流程，如果要完成微信登录的话，最终就要获得微信用户的 openid。在小程序端获取授权码后，向后端服务发送请求，并携带授权码，
+这样后端服务在收到授权码后，就可以去请求微信接口服务。最后后端向小程序返回 openid 和 token 等数据。
+
+| **字段名**  | **数据类型** | **说明**           | **备注** |
+| ----------- | ------------ | ------------------ | -------- |
+| id          | bigint       | 主键               | 自增     |
+| openid      | varchar(45)  | 微信用户的唯一标识 |          |
+| name        | varchar(32)  | 用户姓名           |          |
+| phone       | varchar(11)  | 手机号             |          |
+| sex         | varchar(2)   | 性别               |          |
+| id_number   | varchar(18)  | 身份证号           |          |
+| avatar      | varchar(500) | 微信用户头像路径   |          |
+| create_time | datetime     | 注册时间           |          |
+
+手机号字段比较特殊，个人身份注册的小程序没有权限获取到微信用户的手机号，但如果是以企业的资质注册的小程序就能够拿到微信用户的手机号。
+
+相关配置：
+
+application-dev.yml：
+
+```yaml
+sky:
+  wechat:
+    appid: wxb401fa14d7567036
+    secret: 10fd5727e6f4c260e9765c6e346d0aeb
+```
+
+application.yml：
+
+```yaml
+sky:
+  wechat:
+    appid: ${sky.wechat.appid}
+    secret: ${sky.wechat.secret}
+```
+
+application.yml：
+
+因为该系统现在会有两种用户同时登录，一个管理员，一个微信小程序使用者，所以要设置一个新的 token，通过 token 来区分用户类型
+
+```yaml
+sky:
+  jwt:
+    # 设置jwt签名加密时使用的秘钥
+    admin-secret-key: "RUwYpDnq3GZ8qQsQyDa4bNS0HHV1o7bRk+rCIMeV60U="
+    # 设置jwt过期时间
+    admin-ttl: 7200000
+    # 设置前端传递过来的令牌名称
+    admin-token-name: token
+    user-secret-key: "5fJYB8XnCqD3rQ7Zy+z9vlphxB9WpzOhSBt1UdVTFos="
+    user-ttl: 7200000
+    user-token-name: authentication
+```
+
+****
+## 5. 微信登录实现
+
+### 5.1 分析
+
+在接口文档中 C 端发送的登录请求为 POST 请求，请求参数为 json 格式的 code（微信授权码），而返回的内容则包括用户 id、用户的 openid 以及登陆后生成的 jwt 令牌。
+所以需要封装一个 [UserLoginDTO](./sky-pojo/src/main/java/com/sky/dto/UserLoginDTO.java) 接收 code，封装一个 [UserLoginVO](./sky-pojo/src/main/java/com/sky/vo/UserLoginVO.java) 返回 id、openid、token。
+
+因为现在的系统有两种使用者，所以需要区分这两个用户，那么就需要对它们的 jwt 令牌进行区分，新增一个属于 user 的 [jwt](./sky-server/src/main/java/com/sky/interceptor/JwtTokenUserInterceptor.java) 拦截器，
+并在 WebMvcConfiguration 配置类中注册该拦截器：
+
+```java
+registry.addInterceptor(jwtTokenUserInterceptor)
+                .addPathPatterns("/user/**")
+                .excludePathPatterns("/user/user/login")
+                .excludePathPatterns("/user/shop/status"); // 因为微信用户登陆时就应该可以看到店铺的状态，所以该请求路劲不进行拦截
+```
+
+****
+### 5.2 功能实现
+
+Controller 层：
+
+因为微信小程序登录时生成的 code 是一次性的，发送一次请求就失效，所以后续发送的请求不能依靠 code 来进行判断，所以得靠服务端给小程序用户生成的 token 来对登录者进行判断，
+后续该用户发送的每个请求都会携带该 token 并被拦截验证是否为服务端生成的即可。
+
+```java
+@PostMapping("/login")
+@Operation(summary = "微信登录")
+public Result<UserLoginVO> login(@RequestBody UserLoginDTO userLoginDTO){
+    log.info("微信用户登录：{}", userLoginDTO.getCode());
+    // 微信登录
+    User user = userService.wxLogin(userLoginDTO);
+    // 为微信用户生成 jwt 令牌
+    Map<String, Object> claims = new HashMap<>();
+    claims.put(JwtClaimsConstant.USER_ID, user.getId());
+    String token = JwtUtil.createJWT(jwtProperties.getUserSecretKey(), jwtProperties.getUserTtl(), claims);
+    // 封装 UserLoginVO 对象返回给小程序
+    UserLoginVO userLoginVO = UserLoginVO.builder()
+            .id(user.getId())
+            .openid(user.getOpenid())
+            .token(token)
+            .build();
+    return Result.success(userLoginVO);
+}
+```
+
+Service 层：
+
+小程序的用户登录后，需要对专门的微信服务接口地址发送请求，该请求包含四个参数（上面有记录），如果 code 有效，则会返回 session_key 和 openid，
+目前只需要用到 openid。因为 openid 为小程序用户的唯一标识，所以可以通过它去查找 user 表判断是否为已注册的用户，如果 user 表中没有，代表是第一次登陆，
+则进行注册操作，把 openid 存进去，并返回 User 对象，在小程序界面显示该用户的相关信息。
+
+```java
+// 微信服务接口地址
+public static final String WX_LOGIN = "https://api.weixin.qq.com/sns/jscode2session";
+
+@Override
+public User wxLogin(UserLoginDTO userLoginDTO) {
+    String openid = getOpenid(userLoginDTO.getCode());
+    if(openid == null){
+        throw new LoginFailedException(MessageConstant.LOGIN_FAILED);
+    }
+    // 判断当前用户是否为新用户
+    User user = userMapper.getByOpenid(openid);
+    // 如果是新用户，则完成注册
+    if(user == null){
+        user = User.builder()
+                .openid(openid)
+                .createTime(LocalDateTime.now())
+                .build();
+        userMapper.insert(user);
+    }
+    return user;
+}
+
+// 调用微信接口服务，获取微信用户的 openid
+private String getOpenid(String code) {
+    Map<String, String> map = new HashMap<>();
+    map.put("appid", weChatProperties.getAppid());
+    map.put("secret", weChatProperties.getSecret());
+    map.put("js_code", code);
+    map.put("grant_type", "authorization_code");
+    // 使用封装的 HttpClient 工具类发送 Http 请求
+    String json = HttpClientUtil.doGet(WX_LOGIN, map);
+    JSONObject jsonObject = JSON.parseObject(json);
+    String openid = jsonObject.getString("openid");
+    return openid;
+}
+```
+
+测试：
+
+在小程序端点击登录，查看控制台与数据库中是否有添加记录：
+
+```text
+// 获取到了 openid
+com.sky.mapper.UserMapper.getByOpenid    : ==> Parameters: oEi1JvnOyN6rLbR3Q1ligCJd5nPc(String)
+```
+
+****
+## 6. 商品浏览
+
+### 6.1 查询分类
+
+Controller 层：
+
+该功能是在小程序的左侧显示菜品分类和套餐分类，这里直接调用的是之前写好的 categoryService.list(type) 方法，
+
+```java
+@GetMapping("/list")
+@Operation(summary = "查询分类")
+public Result<List<Category>> list(Integer type) {
+    List<Category> list = categoryService.list(type);
+    return Result.success(list);
+}
+```
+
+****
+### 6.2 查询菜品分类中的菜品
+
+Controller 层：
+
+```java
+@GetMapping("/list")
+@Operation(summary = "根据分类id查询菜品")
+public Result<List<DishVO>> list(Long categoryId) {
+    List<DishVO> list = dishService.listWithFlavor(categoryId);
+    return Result.success(list);
+}
+```
+
+Service 层：
+
+因为查询菜品前，需要先点击某个菜品分类，此时会携带 categoryId，通过该 id 查询对应分类的菜品，但是只能查询到起售状态的菜品，所以查询条件有两个，
+因为之前有写查询分类菜品的 mapper，所以直接封装一个带有这两个查询条件的 Dish 对象即可。然后从查询出的 Dish 集合中依次遍历它们，获取对应的口味，
+然后封装进 DishVO，返回 DishVO 类型的集合。
+
+```java
+@Override
+public List<DishVO> listWithFlavor(Long categoryId) {
+    Dish dish = Dish.builder()
+            .status(StatusConstant.ENABLE)
+            .categoryId(categoryId)
+            .build();
+    List<Dish> dishList = dishMapper.getListByCategoryId(dish);
+    List<DishVO> dishVOList = new ArrayList<>();
+    for (Dish d : dishList) {
+        DishVO dishVO = new DishVO();
+        BeanUtils.copyProperties(d, dishVO);
+        // 根据菜品 id 查询对应的口味
+        List<DishFlavor> flavors = dishFlavorMapper.getByDishId(d.getId());
+        dishVO.setFlavors(flavors);
+        dishVOList.add(dishVO);
+    }
+    return dishVOList;
+}
+```
+
+****
+### 6.3 查询套餐分类中的套餐
+
+因为套餐有多个分类，每个分类中又有多个套餐，所以要先根据分类 id 查询对应的套餐有哪些。
+
+Controller 层：
+
+```java
+@GetMapping("/list")
+@Operation(summary = "根据分类id查询套餐")
+public Result<List<Setmeal>> list(Long categoryId) {
+    List<Setmeal> list = setmealService.list(categoryId);
+    return Result.success(list);
+}
+```
+
+Service 层：
+
+该方法与上面的类似，因为查询条件都是两个，一个 categoryId，一个为起售状态，所以直接封装成 Setmeal 对象作为参数进行查询
+
+```java
+@Override
+public List<Setmeal> list(Long categoryId) {
+    Setmeal setmeal = Setmeal.builder()
+            .status(StatusConstant.ENABLE)
+            .categoryId(categoryId)
+            .build();
+    List<Setmeal> setmealList = setmealMapper.list(setmeal);
+    return setmealList;
+}
+```
+
+****
+### 6.4 查询套餐中的菜品信息
+
+该功能只是简单的展示一些菜品的相关信息到页面，它只展示了 name、copies、image、description 四个属性，所以封装成一个简单的 DishItemVO 对象返回给小程序。
+
+Controller 层：
+
+```java
+@GetMapping("/dish/{id}")
+@Operation(summary = "根据套餐 id 查询包含的菜品列表")
+public Result<List<DishItemVO>> dishList(@PathVariable("id") Long id) {
+    List<DishItemVO> list = setmealService.getDishItemById(id);
+    return Result.success(list);
+}
+```
+
+Service 层：
+
+```java
+@Override
+public List<DishItemVO> getDishItemById(Long id) {
+    return setmealMapper.getDishItemBySetmealId(id);
+}
+```
+
+Mapper 层：
+
+```sql
+<select id="getDishItemBySetmealId" resultType="com.sky.vo.DishItemVO" parameterType="com.sky.vo.DishItemVO">
+    select sd.name, sd.copies, d.image, d.description from setmeal_dish sd
+    left join dish d on sd.dish_id = d.id
+    where sd.setmeal_id = #{setmealId}
+</select>
+```
+
+****
+# 十三、缓存商品、购物车
+
+## 1. 缓存菜品
+
+### 1.1 查询菜品时添加缓存
+```java
+// 构造 redis 中的 key，dish:category:categoryId
+String key = "dish:category:" + categoryId;
+// 查询 redis 是否有缓存数据，如果存在则返回 redis 中的数据
+String dishVOListJson  = stringRedisTemplate.opsForValue().get(key);
+if (dishVOListJson != null && !dishVOListJson.isEmpty()) {
+    // 反序列化为 List<DishVO>
+    List<DishVO> dishVOList = JSON.parseArray(dishVOListJson, DishVO.class);
+    return dishVOList;
+}
+......
+// 不存在则查询数据库并保存在 redis 中
+stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(dishVOList));
+return dishVOList;
+```
+
+****
+### 1.2 清除缓存
+
+因为新增、修改、删除操作会导致数据发生改变，所以需要同步删除 redis 的缓存，确保下次查询 redis 时数据的一致性。
+
+```java
+private void cleanCache(String pattern) {
+    Set<String> keys = stringRedisTemplate.keys(pattern);
+    stringRedisTemplate.delete(keys);
+}
+```
+
+因为这些操作是管理端才能进行的，所以操作的频率不是很高，就可以直接采取删除全部缓存，而不是根据 id 寻找对应的 key 再删除，当然也可以这么做
+
+```java
+// 删除对应分类的 redis 缓存
+Long categoryId = dishMapper.getCategoryId(id);
+String key = "dish:category:" + categoryId;
+cleanCache(key);
+```
+
+****
+
+
 
 
 

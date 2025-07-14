@@ -33,4 +33,7 @@ public interface DishMapper {
     void update(Dish dish);
 
     List<Dish> list(Dish dish);
+
+    @Select("select category_id from dish where id = #{id}")
+    Long getCategoryId(Long id);
 }

@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * 分类管理
  */
-@RestController
+@RestController("adminCategoryController")
 @RequestMapping("/admin/category")
 @Tag(name = "分类相关接口", description = "提供新增分类、分类分页查询、删除分类、修改分类、启用禁用分类、根据类型查询分类")
 @Slf4j

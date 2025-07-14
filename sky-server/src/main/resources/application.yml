@@ -42,6 +42,12 @@ sky:
     admin-ttl: 7200000
     # 设置前端传递过来的令牌名称
     admin-token-name: token
+    user-secret-key: "5fJYB8XnCqD3rQ7Zy+z9vlphxB9WpzOhSBt1UdVTFos="
+    user-ttl: 7200000
+    user-token-name: authentication
+  wechat:
+    appid: ${sky.wechat.appid}
+    secret: ${sky.wechat.secret}
 
 # springdoc-openapi 项目配置
 springdoc:
@@ -73,6 +79,5 @@ aliyun:
     endpoint: https://oss-cn-beijing.aliyuncs.com
     bucketName: cell-sky-take-out
     region: cn-beijing
-
 
 
