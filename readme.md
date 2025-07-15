@@ -2041,7 +2041,7 @@ GET https://api.weixin.qq.com/sns/jscode2session
 通过模拟发送请求：
 
 ```http request
-https://api.weixin.qq.com/sns/jscode2session?appid=wxb401fa14d7567036&secret=10fd5727e6f4c260e9765c6e346d0aeb&js_code=0c3450100mqXBU1RaH000kD0HR34501o&grant_type=authorization_code
+https://api.weixin.qq.com/sns/jscode2session?appid=...&js_code=0c3450100mqXBU1RaH000kD0HR34501o&grant_type=authorization_code
 ```
 
 等到返回结果：
@@ -2394,6 +2394,530 @@ cleanCache(key);
 ```
 
 ****
+## 2. 缓存套餐
+
+### 2.1 Spring Cache
+
+Spring Cache 是一个框架，实现了基于注解的缓存功能，只需要简单地加一个注解，就能实现缓存功能。底层可以切换不同的缓存实现 EHCache、Caffeine、Redis 等。
+常用注解如下：
+
+- @EnableCaching：开启缓存功能，通常加在配置类上
+
+```java
+@Configuration
+@EnableCaching
+public class CacheConfig {
+}
+```
+
+- @Cacheable：在方法执行前先查询缓存中是否有数据，如果有数据，则直接返回缓存数据；如果没有缓存数据，调用方法并将方法返回值放到缓存中
+
+```java
+@Cacheable(value = "userCache", key = "#id") // key = userCache::id
+public User getUserById(Long id) {
+    return userRepository.findById(id);
+}
+```
+
+- value：缓存的名字（对应一个缓存区域） 
+- key：缓存的键（SpEL 表达式） 
+- condition：是否缓存的判断条件 
+- unless：返回结果后判断是否不缓存
+
+```java
+// 结果不为空时缓存
+@Cacheable(value = "userCache", key = "#id", condition = "#id > 100", unless = "#result == null")
+```
+
+- @CachePut：每次方法调用都会执行，并将返回值写入缓存。常用于更新数据库和缓存保持一致的场景。
+
+```java
+@CachePut(value = "userCache", key = "#user.id")
+public User updateUser(User user) {
+    return userRepository.save(user);
+}
+```
+
+- @CacheEvict：清除缓存
+
+```java
+@CacheEvict(value = "userCache", key = "#id")
+public void deleteUser(Long id) {
+    userRepository.deleteById(id);
+}
+```
+
+- allEntries = true：清空整个缓存区域 
+- beforeInvocation = true：方法调用前执行清除（默认是调用后）
+
+```java
+@CacheEvict(value = "userCache", allEntries = true)
+public void clearAll() {
+}
+```
+
+常用 Spring Cache key 表达式:
+
+| 表达式                            | 含义说明                                                      |
+| ------------------------------ | --------------------------------------------------------- |
+| `#user.id`                     | 方法中名为 `user` 的参数的 `id` 属性                                 |
+| `#result.id`                   | 方法返回值的 `id` 属性（仅 `@CachePut` 和 `@Cacheable(unless=)` 中可用） |
+| `#p0.id`                       | 方法第 0 个参数（即第一个参数）的 `id` 属性                                |
+| `#a0.id`                       | 与 `#p0` 等价，方法第 0 个参数的 `id` 属性                             |
+| `#root.args[0].id`             | 通过 `#root` 对象访问第一个参数的 `id` 属性                             |
+| `#root.methodName`             | 当前方法名称（如 `updateUser`）                                    |
+| `#root.targetClass.simpleName` | 当前类名简写，用于生成命名空间式 key                                      |
+
+
+Spring 在启动时会扫描 @EnableCaching 并注册 CacheInterceptor 拦截器，被 @Cacheable、@CachePut、@CacheEvict 标注的方法就会被 AOP 代理，
+当调用这些方法时，会被 CacheInterceptor 拦截，进行如下逻辑：
+
+```text
+@Cacheable：
+    先判断 key 是否在缓存中 -> 如果有命中，返回缓存结果
+    如果没有命中，执行方法体 -> 将返回值放入缓存
+
+@CachePut：
+    执行方法体 -> 将返回值写入缓存（覆盖原值）
+
+@CacheEvict：
+    判断是否执行清除缓存逻辑 -> 删除对应 key 的缓存
+```
+
+使用步骤：
+
+1、配置 yaml 文件
+
+```yaml
+spring:
+  cache:
+    type: redis
+  data:
+    redis:
+      host: ${sky.redis.host}
+      port: ${sky.redis.port}
+      password: ${sky.redis.password}
+      database: ${sky.redis.database}
+```
+
+2、自定义 Redis 缓存配置
+
+在 Spring Boot 整合 Redis 缓存时，无需手动处理反序列化，通过配置 RedisCacheConfiguration 中的序列化器，
+Spring 会在缓存读写过程中自动完成数据的序列化（对象 -> Redis 存储格式）和反序列化（Redis 存储格式 -> 对象）
+
+```java
+@Configuration
+@EnableCaching
+public class RedisCacheConfig {
+    // 因为 Jackson 在序列化或反序列化 LocalDateTime 时无法识别 java.time 类型，所以需要使用之前自定义的序列化器
+    JacksonObjectMapper jacksonObjectMapper = new JacksonObjectMapper();
+    GenericJackson2JsonRedisSerializer serializer = new GenericJackson2JsonRedisSerializer(jacksonObjectMapper);
+
+    // 对 Redis 缓存的各项属性进行配置
+    @Bean
+    public RedisCacheConfiguration cacheConfiguration() {
+        return RedisCacheConfiguration.defaultCacheConfig()
+              .entryTtl(Duration.ofMinutes(10)) // 设置默认过期时间
+              .disableCachingNullValues() // 不缓存 null 值
+              // 把缓存键序列化为字符串格式
+              .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+              // 采用 Jackson JSON 格式对缓存值进行序列化
+              .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(serializer));
+  }
+}
+```
+
+3、注意：
+
+无论是否配置了自定义缓存配置文件，都需要在启动类上添加 @EnableCaching 注解。
+
+缓存嵌套调用问题：
+
+```java
+public class UserService {
+    @Cacheable("user")
+    public User getUser(Long id) {
+        return this.loadFromDb(id);
+    }
+    public User test(Long id) {
+        return this.getUser(id); // 缓存不生效
+    }
+}
+```
+
+因为 this.getUser() 是对象内部调用，没有通过代理，而 Spring AOP 的缓存逻辑（如 @Cacheable）只在通过代理对象调用时生效，
+内部调用 this.方法() 会直接执行目标方法，绕过代理逻辑，因此缓存注解失效。应该通过 Spring 的 @Autowired 注入代理对象，此时缓存才会生效。
+
+```java
+@Autowired
+private UserService self;
+
+public User test(Long id) {
+    return self.getUser(id); // 使用代理对象调用，缓存才会生效
+}
+```
+
+缓存更新问题：
+
+因为 @Cacheable 遵循缓存优先，避免重复执行方法，所以可能不一定执行方法体，而更新操作是为了修改数据库中的数据，所以必须执行方法体，否则数据不会更新到数据库。
+
+```java
+// 错误用法
+@Cacheable(value = "userCache", key = "#user.id")
+public User update(User user) {
+    return userRepository.save(user); // 缓存未更新
+}
+
+// 正确用法
+@CachePut(value = "userCache", key = "#user.id")
+public User update(User user) {
+  return userRepository.save(user);
+}
+```
+
+****
+### 2.2 代码实现
+
+在 SetmealServiceImpl 中添加 @Cacheable、@CachePut、@CacheEvict。
+
+```java
+@CacheEvict(cacheNames = "setmealCache", allEntries = true)
+public void deleteBatch(List<Long> ids) {
+}
+
+@CacheEvict(cacheNames = {"dishItemCache", "setmealCache"}, allEntries = true)
+public void update(SetmealDTO setmealDTO) {
+}
+
+@Cacheable(value = "setmealCache", key = "#categoryId")
+public List<Setmeal> list(Long categoryId) {
+}
+
+@Cacheable(value = "dishItemCache", key = "#id")
+public List<DishItemVO> getDishItemById(Long id) {
+}
+```
+
+需要注意的是，在 update 方法上不能使用 @CachePut，因为 @CachePut 是缓存方法的返回值，如果是 void，没法缓存，导致发生异常。
+
+****
+## 3. 添加购物车
+
+用户可以将菜品或者套餐添加到购物车。对于菜品来说，如果设置了口味信息，则需要选择规格后才能加入购物车；对于套餐来说，可以直接点击将当前套餐加入购物车。
+在购物车中可以修改菜品和套餐的数量，也可以清空购物车。添加购物车时，有可能添加菜品，也有可能添加套餐，故传入参数要么是菜品 id，要么是套餐 id。
+前端传入的数据包含 dishId、setmealId、dishFlavor，所以需要封装一个 [ShoppingCartDTO](./sky-pojo/src/main/java/com/sky/dto/ShoppingCartDTO.java) 来接首。
+
+Controller 层：
+
+```java
+@PostMapping("/add")
+@Operation(summary = "添加购物车")
+public Result<String> add(@RequestBody ShoppingCartDTO shoppingCartDTO) {
+    log.info("添加购物车：{}", shoppingCartDTO);
+    shoppingCartService.addShoppingCart(shoppingCartDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+因为可能对同一个东西进行多次添加，所以每次添加操作前都需要对添加的这个东西进行判断，如果是一样的，那么直接让它数量加一，而前端传来的数据只有 setmealId、dishId、dishFlavor，
+而该操作应该是针对当前登录用户，所以要从 ThreadLocal 中获取当用户的 id 作为条件一起查询，因为菜品和套餐 id 的唯一性，所以很容易区分，但相同的菜品可能有不同的口味，
+它们不能作为相同的东西，所以口味也作为了判断条件，使用这四个条件查询数据库，如果数据存在，那么一定就只能查到一条数据，然后对该数据的 number 属性加一。
+如果添加的是新菜品或套餐，那么就需要判断添加的是哪个，因为要根据它们的类型去查找对应的数据表，这时候就可以根据前端传来的数据判断，因为一次添加操作不可能又传菜品 id 又传套餐 id 的，
+所以可以根据它们谁不为空判断添加的是谁。
+
+```java
+@Override
+public void addShoppingCart(ShoppingCartDTO shoppingCartDTO) {
+    ShoppingCart shoppingCart = new ShoppingCart();
+    BeanUtils.copyProperties(shoppingCartDTO, shoppingCart);
+    // 只能查询当前登录用户自己的购物车数据
+    shoppingCart.setUserId(BaseContext.getCurrentId());
+    // 判断当前商品是否在购物车中
+    List<ShoppingCart> shoppingCartList = shoppingCartMapper.list(shoppingCart);
+    if (shoppingCartList != null && !shoppingCartList.isEmpty()) {
+        // 因为查询条件为 userId、setmealId、dishId、dishFlavor，所以最多只能查询出一条数据
+        // 如果已经存在，就更新数量，数量加 1
+        shoppingCart = shoppingCartList.get(0);
+        shoppingCart.setNumber(shoppingCart.getNumber() + 1);
+        shoppingCartMapper.updateNumberById(shoppingCart);
+    } else {
+        // 如果不存在，插入数据，数量就是 1
+        // 判断当前添加到购物车的是菜品还是套餐
+        Long dishId = shoppingCartDTO.getDishId();
+        if (dishId != null) {
+            // 添加到购物车的是菜品
+            Dish dish = dishMapper.getById(dishId);
+            shoppingCart.setName(dish.getName());
+            shoppingCart.setImage(dish.getImage());
+            shoppingCart.setAmount(dish.getPrice());
+        } else {
+            // 添加到购物车的是套餐
+            Setmeal setmeal = setmealMapper.getById(shoppingCartDTO.getSetmealId());
+            shoppingCart.setName(setmeal.getName());
+            shoppingCart.setImage(setmeal.getImage());
+            shoppingCart.setAmount(setmeal.getPrice());
+        }
+        shoppingCart.setNumber(1);
+        shoppingCart.setCreateTime(LocalDateTime.now());
+        shoppingCartMapper.insert(shoppingCart);
+    }
+}
+```
+
+****
+## 4. 查看购物车
+
+用户每次登录时都会发送一个查看购物车的请求，该功能较为简单，直接根据 userId 查询数据库即可。
+
+Controller 层：
+
+```java
+@GetMapping("/list")
+@Operation(summary = "查看购物车")
+public Result<List<ShoppingCart>> list() {
+    return Result.success(shoppingCartService.showShoppingCart());
+}
+```
+
+Service 层：
+
+因为写添加操作时，已经写了一个查询数据库的 sql，而传入的四个条件中整合包含 userId，所以只需要创建一个只包含 userId 的 ShoppingCart 对象即可。
+
+```java
+@Override
+public List<ShoppingCart> showShoppingCart() {
+  ShoppingCart shoppingCart = ShoppingCart.builder()
+          .userId(BaseContext.getCurrentId())
+          .build();
+  return shoppingCartMapper.list(shoppingCart);
+}
+```
+
+****
+## 5. 清空购物车
+
+清空操作只需要删除表中 userId 的所有数据即可。
+
+```java
+@DeleteMapping("/clean")
+@Operation(summary = "清空购物车商品")
+public Result<String> clean(){
+    shoppingCartService.cleanShoppingCart();
+    return Result.success();
+}
+
+@Override
+public void cleanShoppingCart() {
+  shoppingCartMapper.deleteByUserId(BaseContext.getCurrentId());
+}
+```
+
+****
+## 6. 删除购物车中一个商品
+
+该功能与添加功能相反，删除前先判断它的数量是否为 1，如果为 1 则直接删除该条记录，如果不为 1，则直接修改它的 number 值即可。
+
+Controller 层：
+
+```java
+@PostMapping("/sub")
+@Operation(summary = "删除购物车中一个商品")
+public Result<String> sub(@RequestBody ShoppingCartDTO shoppingCartDTO) {
+    shoppingCartService.deleteOne(shoppingCartDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+与添加购物车不同的是，这里不需要对是否存在进行判断，因为能进行删减操作证明一定存在，所以只需要查询出进行操作的是哪个即可，然后对它的数量进行判断，大于 1 则数量减一然后结束方法即可。
+
+```java
+@Override
+@Transactional
+public void deleteOne(ShoppingCartDTO shoppingCartDTO) {
+  ShoppingCart shoppingCart = new ShoppingCart();
+  BeanUtils.copyProperties(shoppingCartDTO, shoppingCart);
+  List<ShoppingCart> shoppingCartList = shoppingCartMapper.list(shoppingCart);
+  shoppingCart = shoppingCartList.getFirst();
+  if (shoppingCart.getNumber() > 1) {
+    shoppingCart.setNumber(shoppingCart.getNumber() - 1);
+    shoppingCartMapper.updateNumberById(shoppingCart);
+    return;
+  }
+  shoppingCartMapper.delete(shoppingCart);
+}
+```
+
+Mapper 层：
+
+因为同一个菜品不同口味被视为不同的菜品，所以口味也要作为删除条件而存在。
+
+```sql
+<delete id="delete">
+delete from shopping_cart
+  <where>
+     <if test="dishId != null">and dish_id = #{dishId}</if>
+     <if test="setmealId != null">and setmeal_id = #{setmealId}</if>
+     <if test="dishFlavor != null">and dish_flavor = #{dishFlavor}</if>
+  </where>
+</delete>
+```
+
+****
+# 十四、用户下单、订单支付
+
+## 1. 收货地址
+
+直接通过当前登录用户的 id 查询数据库中的表即可。
+
+```java
+@GetMapping("/list")
+@Operation(summary = "查询当前登录用户的所有地址信息")
+public Result<List<AddressBook>> list() {
+    AddressBook addressBook = new AddressBook();
+    addressBook.setUserId(BaseContext.getCurrentId());
+    List<AddressBook> list = addressBookService.list(addressBook);
+    return Result.success(list);
+}
+
+@Override
+public List<AddressBook> list(AddressBook addressBook) {
+  return addressBookMapper.list(addressBook);
+}
+```
+
+```sql
+<select id="list" parameterType="com.sky.entity.AddressBook" resultType="com.sky.entity.AddressBook">
+  select * from address_book
+  <where>
+      <if test="userId != null">
+          and user_id = #{userId}
+      </if>
+      <if test="phone != null">
+          and phone = #{phone}
+      </if>
+      <if test="isDefault != null">
+          and is_default = #{isDefault}
+      </if>
+  </where>
+</select>
+```
+
+还有修改地址时会发送一个根据当前地址 id 查询地址信息的请求，所以还得写一个根据 id 查询的方法，其次就是删除。而设置默认地址本质上就是一种更新操作，
+所以在设置某个地址为默认地址时，可以先把所有的地址设置为非默认地址，然后再把当前选定的地址的该值进行修改即可。
+
+```java
+@Override
+public void setDefault(AddressBook addressBook) {
+    // 将但当前用户的所有地址修改为非默认地址
+    addressBook.setIsDefault(0);
+    addressBook.setUserId(BaseContext.getCurrentId());
+    addressBookMapper.updateIsDefaultByUserId(addressBook);
+    // 将选定的地址修改为默认地址
+    addressBook.setIsDefault(1);
+    addressBookMapper.update(addressBook);
+}
+```
+
+****
+## 2. 用户下单
+
+在电商系统中，用户是通过下单的方式通知商家某个用户已经购买了商品，需要商家进行备货和发货。用户下单后会产生订单相关数据，订单数据需要能够体现如下信息：
+
+- 商品名称
+- 对应商品的数量
+- 订单总金额
+- 收货人
+- 收货地址
+- 用户手机号
+
+所以需要把这些信息放到一个 order 表中，当然通常还包括其他的内容。所以除了这个还需要一个 order_detail 表，用来记录当前用户点的东西的详细信息，
+因为这些信息通常是一个菜品作为一条数据，所以不会放进 order 表中，当成功创建订单并向 order 中插入数据时，
+也要同时向 order_detail 插入关联的菜品信息（多个菜品就多条数据），确保后续用户可以查看到自己点的菜品。
+
+在前端提交订单时，会携带下单地址、总金额、配送时间等信息，具体参考接口文档，所以需要封装一个 [OrdersSubmitDTO](./sky-pojo/src/main/java/com/sky/dto/OrdersSubmitDTO.java)，
+而返回值通常只需要在前端显示生成的订单 id、金额、订单号以及下单时间，所以封装一个返回对象 [OrderSubmitVO](./sky-pojo/src/main/java/com/sky/vo/OrderSubmitVO.java)。
+
+Controller 层：
+
+```java
+@PostMapping("/submit")
+@Operation(summary = "用户下单")
+public Result<OrderSubmitVO> submit(@RequestBody OrdersSubmitDTO ordersSubmitDTO) {
+    log.info("用户下单：{}", ordersSubmitDTO);
+    OrderSubmitVO orderSubmitVO = orderService.submitOrder(ordersSubmitDTO);
+    return Result.success(orderSubmitVO);
+}
+```
+
+Service 层：
+
+在提交订单前需要先进行一些判断，例如收货地址是否为空，购物车是否为空，如果这些数据都不存在的话，就不能提交订单。所以先通过前端传递的地址 id，查询数据库中是否有这条数据，
+然后根据当前用户 id 查询购物车表，看里面是否有数据。如果都存在，即可正常提交订单，然后封装订单信息并插入数据库中。而对于订单详情信息来说，需要详细的购物车信息才能进行插入操作，
+而再插入前已经执行过一次查询操作，所以可以直接把查到的购物车中的数据封装成集合（一个菜品即一条数据），动态插入 order_detail，然后清空购物车，返回数据。
+
+```java
+@Override
+public OrderSubmitVO submitOrder(OrdersSubmitDTO ordersSubmitDTO) {
+    // 异常情况的处理（收货地址为空、购物车为空）
+    AddressBook addressBook = addressBookMapper.getById(ordersSubmitDTO.getAddressBookId());
+    if (addressBook == null) {
+        throw new AddressBookBusinessException(MessageConstant.ADDRESS_BOOK_IS_NULL);
+    }
+    Long userId = BaseContext.getCurrentId();
+    ShoppingCart shoppingCart = new ShoppingCart();
+    shoppingCart.setUserId(userId);
+    // 查询当前用户的购物车数据
+    List<ShoppingCart> shoppingCartList = shoppingCartMapper.list(shoppingCart);
+    if (shoppingCartList == null || shoppingCartList.isEmpty()) {
+        throw new ShoppingCartBusinessException(MessageConstant.SHOPPING_CART_IS_NULL);
+    }
+    // 构造订单数据
+    Orders order = new Orders();
+    BeanUtils.copyProperties(ordersSubmitDTO, order);
+    order.setPhone(addressBook.getPhone());
+    order.setAddress(addressBook.getDetail());
+    order.setConsignee(addressBook.getConsignee());
+    order.setNumber(String.valueOf(System.currentTimeMillis()));
+    order.setUserId(userId);
+    order.setStatus(Orders.PENDING_PAYMENT);
+    order.setPayStatus(Orders.UN_PAID);
+    order.setOrderTime(LocalDateTime.now());
+    // 向订单表插入一条数据
+    orderMapper.insert(order);
+    // 订单明细数据
+    List<OrderDetail> orderDetailList = new ArrayList<>();
+    for (ShoppingCart cart : shoppingCartList) {
+        OrderDetail orderDetail = new OrderDetail();
+        BeanUtils.copyProperties(cart, orderDetail);
+        orderDetail.setOrderId(order.getId());
+        orderDetailList.add(orderDetail);
+    }
+    // 向订单明细表插入N条数据
+    orderDetailMapper.insertBatch(orderDetailList);
+    // 清空购物车数据
+    shoppingCartMapper.deleteByUserId(userId);
+    OrderSubmitVO orderSubmitVO = OrderSubmitVO.builder()
+            .id(order.getId())
+            .orderNumber(order.getNumber())
+            .orderAmount(order.getAmount())
+            .orderTime(order.getOrderTime())
+            .build();
+    return orderSubmitVO;
+}
+```
+
+****
+## 3. 订单支付
+
+
+
+
+
+
 
 
 

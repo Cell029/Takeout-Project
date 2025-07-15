@@ -9,8 +9,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.handler.HandlerMethod;
+
 import org.springframework.stereotype.Component;
+import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 @Slf4j
@@ -31,11 +32,12 @@ public class JwtTokenUserInterceptor implements HandlerInterceptor {
 
         // 校验令牌
         try {
+            log.info("JwtTokenUserInterceptor 执行了，当前 token：{}", token);
             log.info("jwt校验:{}", token);
             // 如果解析失败（签名不对、格式错误、过期），就抛异常
             Claims claims = JwtUtil.parseJWT(jwtProperties.getUserSecretKey(), token);
             Long userId = Long.valueOf(claims.get(JwtClaimsConstant.USER_ID).toString());
-            log.info("当前用户的id：", userId);
+            log.info("当前用户的id：{}", userId);
             BaseContext.setCurrentId(userId);
             // 通过，放行
             return true;
