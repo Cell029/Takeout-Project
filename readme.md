@@ -2913,8 +2913,332 @@ public OrderSubmitVO submitOrder(OrdersSubmitDTO ordersSubmitDTO) {
 ****
 ## 3. 订单支付
 
+### 3.1 微信支付
+
+1、用户下单初始化
+
+1. 微信用户进入微信小程序下单，开启支付流程，这是交互的起点。 
+2. 小程序将下单请求传给 “商户系统”，触发订单创建逻辑。
+
+2、订单与支付参数准备
+
+3. 商户系统生成订单，返回订单号等数据给小程序，用于后续关联支付信息。
+4. 小程序向商户系统申请微信支付 -> 商户调用微信后台（支付接口）-> 微信返回支付交易标识 -> 商户对支付参数（含交易标识等）加密 “再次签名”，确保参数安全、防篡改。
+
+3、支付确认与执行
+
+5. 商户系统把 “签名后的支付参数” 返回小程序 -> 小程序调起支付页，用户确认支付，完成支付授权。
+6. 小程序向微信后台发起 “确认支付” -> 微信处理后返回支付结果，告知是否成功。
+
+4、结果同步与收尾
+
+7. 小程序接收支付结果，显示给用户（成功 / 失败提示）。
+8. 微信后台将支付结果推送给商户系统 -> 商户系统更新订单状态（如 “已支付”），完成订单闭环，方便后续业务（发货、对账等）。
 
 
+微信支付相关接口：
+
+1、JSAPI 下单接口
+
+JSAPI 下单接口用于在微信支付系统中创建一笔交易，生成唯一的 prepay_id，它是发起支付的凭证，请求地址为：
+
+```http request
+POST https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi
+```
+
+请求参数：
+
+| 字段             | 是否必须 | 说明                    |
+| -------------- | ---- | --------------------- |
+| `appid`        | 是    | 小程序的 appid            |
+| `mchid`        | 是    | 商户号                   |
+| `description`  | 是    | 商品描述                  |
+| `out_trade_no` | 是    | 商户订单号，必须唯一            |
+| `notify_url`   | 是    | 支付成功后的回调通知地址          |
+| `amount`       | 是    | 金额信息（对象）              |
+| `payer`        | 是    | 支付者信息（对象，必须包含 openid） |
+
+通常会返回一些相关信息：
+
+```json
+{
+"appid" : "wxd678efh567hg6787",
+"mchid" : "1230000109",
+"description" : "Image形象店-深圳腾大-QQ公仔",
+"out_trade_no" : "1217752501201407033233368018",
+"time_expire" : "2018-06-08T10:34:56+08:00",
+"attach" : "自定义数据说明",
+"notify_url" : " https://www.weixin.qq.com/wxpay/pay.php",
+"goods_tag" : "WXG",
+"support_fapiao" : false, 
+  // 金额结构体
+"amount" : { 
+  "total" : 100,
+  "currency" : "CNY"
+},
+  // 支付者结构体
+"payer" : { 
+  "openid" : "ovqdowRIfstpQK_kYShFS2MSS9XS"
+},
+"detail" : {
+  "cost_price" : 608800,
+  "invoice_id" : "微信123",
+  "goods_detail" : [
+    {
+      "merchant_goods_id" : "1246464644",
+      "wechatpay_goods_id" : "1001",
+      "goods_name" : "iPhoneX 256G",
+      "quantity" : 1,
+      "unit_price" : 528800
+    }
+  ]
+},
+"scene_info" : {
+  "payer_client_ip" : "14.23.150.211",
+  "device_id" : "013467007045764",
+  "store_info" : {
+    "id" : "0001",
+    "name" : "腾讯大厦分店",
+    "area_code" : "440305",
+    "address" : "广东省深圳市南山区科技中一道10000号"
+  }
+},
+"settle_info" : {
+  "profit_sharing" : false
+}
+}
+```
+
+```json
+// 请求成功后的返回结果，这是后续调起支付的关键参数
+{
+  "prepay_id" : "wx201410272009395522657a690389285100"
+}
+```
+
+2、小程序端调起支付
+
+通过 JSAPI/小程序下单接口获取到发起支付的必要参数 prepay_id，然后使用微信支付提供的小程序方法调起微信支付。微信小程序通过调用 wx.requestPayment 方法，
+拉起支付界面让用户确认并支付。
+
+请求参数：
+
+| 字段          | 说明                                           |
+| ----------- |----------------------------------------------|
+| `timeStamp` | 支付时间戳，字符串形式（秒）                               |
+| `nonceStr`  | 随机字符串，不长于32位                            |
+| `package`   | 固定格式为 `prepay_id=xxx`                        |
+| `signType`  | 默认为 `RSA`，仅支持 `RSA`                          |
+| `paySign`   | 使用字段appId、timeStamp、nonceStr、package计算得出的签名值 |
+
+
+```json
+wx.requestPayment
+(
+  {
+    "timeStamp": "1414561699",
+    "nonceStr": "5K8264ILTKCH16CQ2502SI8ZNMTM67VS",
+    "package": "prepay_id=wx201410272009395522657a690389285100",
+    "signType": "RSA",
+    "paySign": "oR9d8PuhnIc+YZ8cBHFCwfgpaK9gd7vaRvkYD7rthRAZ\/X+QBhcCYL21N7cHCTUxbQ+EAt6Uy+lwSN22f5YZvI45MLko8Pfso0jm46v5hqcVwrk6uddkGuT+Cdvu4WBqDzaDjnNa5UK3GfE1Wfl2gHxIIY5lLdUgWFts17D4WuolLLkiFZV+JSHMvH7eaLdT9N5GBovBwu5yYKUR7skR8Fu+LozcSqQixnlEZUfyE55feLOQTUYzLmR9pNtPbPsu6WVhbNHMS3Ss2+AehHvz+n64GDmXxbX++IOBvm2olHu3PsOUGRwhudhVf7UcGcunXt8cqNjKNqZLhLw4jq\/xDg==",
+    "success":function(res){},
+    "fail":function(res){},
+    "complete":function(res){}
+  }
+)
+```
+
+****
+### 3.2 内网穿透工具
+
+微信支付的异步支付结果通知（notify_url）是由微信服务器主动回调商户服务的公网 HTTP 地址，而如果商户系统部署在本地开发环境（比如 localhost 或局域网IP），
+微信服务器是无法访问该机器的，因为它不在公网。它只能访问类似：
+
+```http request
+https://pay.example.com/wechat/notify
+```
+
+而不是：
+
+```http request
+http://localhost:8080/wechat/notify
+http://127.0.0.1:8080/wechat/notify
+```
+
+而要让本地服务器的端口映射到公网，从而让微信服务器可以访问本地系统，就需要使用到内网穿透工具。通过 cpolar 软件可以获得一个临时域名，
+而这个临时域名是一个公网 ip，这样微信后台就可以请求到商户系统了。
+
+下载地址：[https://dashboard.cpolar.com/get-started](https://dashboard.cpolar.com/get-started)，注册成功后，可以获取到一个隧道 Authtoken，
+复制后进入软件所在目录的控制台，执行以下命令：
+
+```shell
+cpolar.exe authtoken ....
+```
+
+然后将临时域名隐射到本地后端服务：
+
+```shell
+cpolar.exe http 8080
+```
+
+返回结果：
+
+```shell
+cpolar by @bestexpresser                                                                                
+
+Tunnel Status       online
+Account             cell (Plan: Free)
+Version             2.86.16/3.18
+Web Interface       127.0.0.1:4042
+Forwarding          http://1627e927.r36.cpolar.top -> http://localhost:8080
+Forwarding          https://1627e927.r36.cpolar.top -> http://localhost:8080 # 这个就是映射的公共域名
+# Conn              0
+Avg Conn Time       0.00ms
+```
+
+前端发送请求时也不再是通过 localhost，而是使用这个：
+
+```http request
+https://1627e927.r36.cpolar.top/admin/employee/login
+```
+
+****
+### 3. 代码实现
+
+因为实现真正的微信支付需要用到商户注册，所以这里直接跳过支付功能，直接通过调用支付成功的方法，然后生成对应的订单信息，不涉及那些支付加密等操作。
+
+Controller 层：
+
+因为前端发送该请求只携带了订单号和支付方式两种信息，所以后续直接通过订单号更新订单状态即可。
+
+```java
+@PutMapping("/payment")
+@Operation(summary = "订单支付")
+public Result<OrderPaymentVO> payment(@RequestBody OrdersPaymentDTO ordersPaymentDTO) throws Exception {
+    log.info("订单支付：{}", ordersPaymentDTO);
+    OrderPaymentVO orderPaymentVO = orderService.payment(ordersPaymentDTO);
+    log.info("生成预支付交易单：{}", orderPaymentVO);
+    return Result.success(orderPaymentVO);
+}
+```
+
+Service 层：
+
+这里直接模拟小程序下单需要传递的必要参数，随意设置一些信息返回给前端，确保它获取到的数据不为空，然后直接调用支付成功的方法 paySuccess()，
+
+```java
+@Override
+public OrderPaymentVO payment(OrdersPaymentDTO ordersPaymentDTO) {
+    OrderPaymentVO orderPaymentVO = OrderPaymentVO.builder()
+            .nonceStr(UUID.randomUUID().toString().replaceAll("-", ""))
+            .paySign("test")
+            .timeStamp(String.valueOf(System.currentTimeMillis() / 1000))
+            .signType("noType")
+            .packageStr("package")
+            .build();
+    paySuccess(ordersPaymentDTO.getOrderNumber());
+    return orderPaymentVO;
+}
+```
+
+```text
+生成预支付交易单：OrderPaymentVO(nonceStr=71a96ebf2a0f4d54a4421d6d3fdceaa1, paySign=test, timeStamp=1752655580, signType=noType, packageStr=package)
+```
+
+然后直接根据前端发送来的订单号对提交订单后生成的订单信息进行相关的修改，这里是对订单状态、订单支付状态和下单时间进行修改（提交订单时这些数据为默认值）
+
+```java
+public void paySuccess(String outTradeNo) {
+    // 根据订单号查询订单
+    Orders ordersDB = orderMapper.getByNumber(outTradeNo);
+    // 根据订单 id 更新订单的状态、支付方式、支付状态、结账时间
+    Orders orders = Orders.builder()
+            .id(ordersDB.getId())
+            .status(Orders.TO_BE_CONFIRMED)
+            .payStatus(Orders.PAID)
+            .checkoutTime(LocalDateTime.now())
+            .build();
+    orderMapper.update(orders);
+}
+```
+
+****
+## 4. 历史订单
+
+因为查询历史订单需要展示相关订单信息和该订单中包含的菜品信息，所以需要封装一个返回对象，里面包含 Orders 中的内容，还要包含 OrderDetail 的内容，
+所以封装了一个 [OrderVO](./sky-pojo/src/main/java/com/sky/vo/OrderVO.java)，它继承 Orders，所以拥有 Orders 的所有属性，并且包含一个 OrderDetail 类型的集合，
+最后查到的数据封装进这个对象并返回即可。
+
+Controller 层：
+
+```java
+@GetMapping("/historyOrders")
+@Operation(summary = "历史订单查询")
+public Result<PageResult> page(HistoryOrdersPageQueryDTO historyOrdersPageQueryDTO) {
+    PageResult pageResult = orderService.pageQuery4User(historyOrdersPageQueryDTO);
+    return Result.success(pageResult);
+}
+```
+
+Service 层：
+
+先根据当前 userId 查到对应的订单有哪些，然后获取订单的 id，再通过每个订单的 id 查询 OrderDetail 详情，因为通过分页查询，查到的是 Orders 类型的 List，
+所以需要依次遍历把订单信息封装进 OrderVO，接着把查询到的 OrderDetail 信息一起封装进去，最后包装进集合并返回。
+
+```java
+@Override
+public PageResult pageQuery4User(HistoryOrdersPageQueryDTO historyOrdersPageQueryDTO) {
+    PageHelper.startPage(historyOrdersPageQueryDTO.getPage(), historyOrdersPageQueryDTO.getPageSize());
+    Orders orders = Orders.builder()
+            .userId(BaseContext.getCurrentId())
+            .status(historyOrdersPageQueryDTO.getStatus())
+            .build();
+    // 根据用户 id 以及订单状态查询出有哪些订单，然后获取它们的订单 id，通过订单号获取每个订单的详细情况
+    Page<Orders> page = orderMapper.pageQuery(orders);
+    List<OrderVO> list = new ArrayList<>();
+    if (page != null && page.getTotal() > 0) {
+        for (Orders order : page) {
+            // 订单 id
+            Long orderId = order.getId();
+            List<OrderDetail> orderDetails = orderDetailMapper.getByOrderId(orderId);
+            OrderVO orderVO = new OrderVO();
+            BeanUtils.copyProperties(order, orderVO);
+            orderVO.setOrderDetailList(orderDetails);
+            list.add(orderVO);
+        }
+    }
+    return new PageResult(page.getTotal(), list);
+}
+```
+
+查询某个订单详情类似，都是先查到对应的订单，然后根据订单查到 OrderDetail，最后一起封装进 OrderVO，只不过上面返回的是集合，这里返回一个单独的对象即可。
+
+Controller 层：
+
+```java
+@GetMapping("/orderDetail/{id}")
+@Operation(summary = "查询订单详情")
+public Result<OrderVO> details(@PathVariable("id") Long id) {
+    OrderVO orderVO = orderService.details(id);
+    return Result.success(orderVO);
+}
+```
+
+Service 层：
+
+```java
+@Override
+public OrderVO details(Long id) {
+    Orders orders = orderMapper.getById(id);
+    OrderVO orderVO = new OrderVO();
+    BeanUtils.copyProperties(orders, orderVO);
+    List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
+    orderVO.setOrderDetailList(orderDetailList);
+    return orderVO;
+}
+```
+
+****
 
 
 
