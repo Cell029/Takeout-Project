@@ -3239,6 +3239,814 @@ public OrderVO details(Long id) {
 ```
 
 ****
+## 5. 取消订单
+
+待支付和待接单状态下，用户可直接取消订单，但商家已接单状态下、派送中状态下，用户不能自己取消订单；取消订单后需要将订单状态修改为“已取消”。
+
+Controller 层：
+
+```java
+@PutMapping("/cancel/{id}")
+@Operation(summary = "取消订单")
+public Result cancel(@PathVariable("id") Long id) throws Exception {
+    orderService.userCancelById(id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+因为前端会发送当前订单的id，所以可以根据id查询对应的订单，然后判断该订单的状态，根据不同的状态决定是否可以进行取消订单，成功取消订单，则需要把订单状态修改为已取消。
+
+```java
+@Override
+public void userCancelById(Long id) {
+    // 根据id查询订单
+    Orders ordersDB = orderMapper.getById(id);
+    // 校验订单是否存在
+    if (ordersDB == null) {
+        throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+    }
+    // 订单状态 1待付款 2待接单 3已接单 4派送中 5已完成 6已取消
+    if (ordersDB.getStatus() > 2) {
+        throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+    }
+    // 当订单状态为待付款和待接单时
+    Orders orders = new Orders();
+    orders.setId(ordersDB.getId());
+    // 更新订单状态、取消原因、取消时间
+    orders.setStatus(Orders.CANCELLED);
+    orders.setCancelReason("用户取消");
+    orders.setCancelTime(LocalDateTime.now());
+    orderMapper.update(orders);
+}
+```
+
+## 6. 再来一单
+
+再来一单就是将原订单中的商品重新加入到购物车中，但再执行再次添加商品时，会先执行依次清空购物车的操作，防止多次点击再来一单导致购物车一直新增
+
+Controller 层：
+
+```java
+@PostMapping("/repetition/{id}")
+@Operation(summary = "再来一单")
+public Result repetition(@PathVariable Long id) {
+    orderService.repetition(id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+根据订单id可以查询到关联的所有订单详情信息，因为一个订单可以包含多条订单详情（一个商品对应一条），所以查出的数据以集合的形式接收，
+然后依次把每条数据封装进购物车对象中 ShoppingCart，然后把这些购物车对象插入表中即可。
+
+```java
+@Override
+public void repetition(Long id) {
+    // 根据订单id查询当前订单详情
+    List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
+    for (OrderDetail orderDetail : orderDetailList) {
+        ShoppingCart shoppingCart = new ShoppingCart();
+        BeanUtils.copyProperties(orderDetail, shoppingCart);
+        shoppingCart.setUserId(BaseContext.getCurrentId());
+        shoppingCart.setCreateTime(LocalDateTime.now());
+        shoppingCartMapper.insert(shoppingCart);
+    }
+}
+```
+
+****
+# 十五、商家端订单管理
+
+## 1. 订单搜索
+
+商家端支持输入订单号/手机号进行搜索（支持模糊搜索），也可以根据订单状态、下单时间、进行筛选。
+
+Controller 层：
+
+```java
+@GetMapping("/conditionSearch")
+@Operation(summary = "订单搜索")
+public Result<PageResult> conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO) {
+    PageResult pageResult = orderService.conditionSearch(ordersPageQueryDTO);
+    return Result.success(pageResult);
+}
+```
+
+Service 层：
+
+根据前端发送来的数据进行分页查询，获取到某页的所有订单信息，然后把订单信息封装进 OrderVO 返回给前端展示。而 OrderVO 中有个 private String orderDishes 字段，
+它就是用来接收所有菜品名称的，所以要把查询出的菜品信息中提取菜品名和数量，用字符串拼接起来，然后注入到这个字段，这样前端页面才会展示出来。
+
+```java
+@Override
+public PageResult conditionSearch(OrdersPageQueryDTO ordersPageQueryDTO) {
+  PageHelper.startPage(ordersPageQueryDTO.getPage(), ordersPageQueryDTO.getPageSize());
+  Page<Orders> page = orderMapper.pageQuery2(ordersPageQueryDTO);
+  List<OrderVO> list = new ArrayList<>();
+  if (page != null && page.getTotal() > 0) {
+    for (Orders order : page) {
+      OrderVO orderVO = new OrderVO();
+      BeanUtils.copyProperties(order, orderVO);
+      List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(order.getId());
+      StringBuilder orderDishesStr = new StringBuilder();
+      for (OrderDetail orderDetail : orderDetailList) {
+        orderDishesStr.append(orderDetail.getName()).append("*").append(orderDetail.getNumber()).append("；");
+      }
+      orderDishesStr = new StringBuilder(orderDishesStr.substring(0, orderDishesStr.length() - 1) + "。");
+      orderVO.setOrderDishes(orderDishesStr.toString());
+      orderVO.setOrderDetailList(orderDetailList);
+      list.add(orderVO);
+    }
+  }
+  return new PageResult(page.getTotal(), list);
+}
+```
+
+Mapper 层：
+
+因为可以根据时间范围来查询订单，所以需要传入时间作为查询条件，而 order 表中没有开始和结束时间，只有订单下单时间，所以只能通过判断下单时间是否在指定的时间范围内，
+order_time &gt;= #{beginTime} 中的 &gt;= 是 XML 中表示 >= 的转义字符，&lt;= 是 <= 的转义字符。
+
+```sql
+<select id="pageQuery2" resultType="com.sky.entity.Orders">
+    select * from orders
+    <where>
+        <if test="number != null and number!=''">
+            and number like concat('%',#{number},'%')
+        </if>
+        <if test="phone != null and phone!=''">
+            and phone like concat('%',#{phone},'%')
+        </if>
+        <if test="userId != null">
+            and user_id = #{userId}
+        </if>
+        <if test="status != null">
+            and status = #{status}
+        </if>
+        <if test="beginTime != null">
+            and order_time &gt;= #{beginTime}
+        </if>
+        <if test="endTime != null">
+            and order_time &lt;= #{endTime}
+        </if>
+    </where>
+    order by order_time desc
+</select>
+```
+
+****
+## 2. 各个状态的订单数量统计
+
+该请求没有携带任何参数，但需要返回带派送、派送中、待接单的订单数量。
+
+Controller 层：
+
+```java
+@GetMapping("/statistics")
+@Operation(summary = "各个状态的订单数量统计")
+public Result<OrderStatisticsVO> statistics() {
+    OrderStatisticsVO orderStatisticsVO = orderService.statistics();
+    return Result.success(orderStatisticsVO);
+}
+```
+
+Service 层：
+
+直接根据对应的状态值查询数据库中有几条订单即可。
+
+```java
+@Override
+public OrderStatisticsVO statistics() {
+    // 根据状态，分别查询出待接单、待派送、派送中的订单数量
+    // select count(id) from orders where status = #{status}
+    Integer toBeConfirmed = orderMapper.countStatus(Orders.TO_BE_CONFIRMED);
+    Integer confirmed = orderMapper.countStatus(Orders.CONFIRMED);
+    Integer deliveryInProgress = orderMapper.countStatus(Orders.DELIVERY_IN_PROGRESS);
+    // 将查询出的数据封装到 orderStatisticsVO 中响应
+    OrderStatisticsVO orderStatisticsVO = new OrderStatisticsVO();
+    orderStatisticsVO.setToBeConfirmed(toBeConfirmed);
+    orderStatisticsVO.setConfirmed(confirmed);
+    orderStatisticsVO.setDeliveryInProgress(deliveryInProgress);
+    return orderStatisticsVO;
+}
+```
+
+****
+## 3. 查询订单详情
+
+订单详情页面需要展示订单基本信息（状态、订单号、下单时间、收货人、电话、收货地址、金额等），还需要展示订单明细数据（商品名称、数量、单价）。也就是将订单表和订单详情表的内容一起封装进一个对象。
+而在用户端也有一个查询订单详情的操作，所以它们的操作是一样的。
+
+Controller 层：
+
+```java
+@GetMapping("/details/{id}")
+@Operation(summary = "查询订单详情")
+public Result<OrderVO> details(@PathVariable("id") Long id) {
+    OrderVO orderVO = orderService.details(id);
+    return Result.success(orderVO);
+}
+```
+
+Service 层：
+
+```java
+@Override
+public OrderVO details(Long id) {
+    Orders orders = orderMapper.getById(id);
+    OrderVO orderVO = new OrderVO();
+    BeanUtils.copyProperties(orders, orderVO);
+    List<OrderDetail> orderDetailList = orderDetailMapper.getByOrderId(id);
+    orderVO.setOrderDetailList(orderDetailList);
+    return orderVO;
+}
+```
+
+****
+## 4. 商家接单
+
+商家接单其实就是将订单的状态修改为“已接单”，所以就是把订单状态修改一下就行。
+
+Controller 层：
+
+```java
+@PutMapping("/confirm")
+@Operation(summary = "接单")
+public Result confirm(@RequestBody OrdersConfirmDTO ordersConfirmDTO) {
+    orderService.confirm(ordersConfirmDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+```java
+@Override
+public void confirm(OrdersConfirmDTO ordersConfirmDTO) {
+    Orders orders = Orders.builder()
+            .id(ordersConfirmDTO.getId())
+            .status(Orders.CONFIRMED)
+            .build();
+    orderMapper.update(orders);
+}
+```
+
+****
+## 5. 商家拒单
+
+商家拒单其实就是将订单状态修改为“已取消”，但只有订单在“待接单”状态时才可以执行拒单操作，并且商家拒单时需要指明拒单原因。因为没有实现真实的付款操作，
+所以这里不涉及退款操作，只把订单的支付状态设置为已退款（买家支付状态需要为已支付才执行）。
+
+Controller 层：
+
+```java
+@PutMapping("/rejection")
+@Operation(summary = "拒单")
+public Result rejection(@RequestBody OrdersRejectionDTO ordersRejectionDTO) throws Exception {
+    orderService.rejection(ordersRejectionDTO);
+    return Result.success();
+}
+```
+
+Service 层：
+
+```java
+@Override
+public void rejection(OrdersRejectionDTO ordersRejectionDTO) {
+    Orders ordersDB = orderMapper.getById(ordersRejectionDTO.getId());
+    // 只有订单为待接单状态才能拒单，否则抛出异常
+    if (ordersDB == null || !Objects.equals(ordersDB.getStatus(), Orders.TO_BE_CONFIRMED)) {
+        throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+    }
+    Orders orders = new Orders();
+    // 查询订单的支付状态
+    Integer payStatus = ordersDB.getPayStatus();
+    if (Objects.equals(payStatus, Orders.PAID)) {
+        // 用户已支付，需要退款
+        orders.setPayStatus(Orders.REFUND);
+    } else {
+        orders.setPayStatus(ordersDB.getPayStatus());
+    }
+    orders.setId(ordersDB.getId());
+    orders.setStatus(Orders.CANCELLED);
+    orders.setRejectionReason(ordersRejectionDTO.getRejectionReason());
+    orders.setCancelTime(LocalDateTime.now());
+    orderMapper.update(orders);
+}
+```
+
+****
+## 6. 派送订单
+
+派送订单其实就是将订单状态从“带派送”修改为“派送中”，同样的只有状态为“待派送”的订单可以执行派送订单操作。完成订单同理。
+
+Controller 层：
+
+```java
+@PutMapping("/delivery/{id}")
+@Operation(summary = "派送订单")
+public Result delivery(@PathVariable("id") Long id) {
+    orderService.delivery(id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+```java
+@Override
+public void delivery(Long id) {
+    Orders ordersDB = orderMapper.getById(id);
+    if (ordersDB == null || !ordersDB.getStatus().equals(Orders.CONFIRMED)) {
+        throw new OrderBusinessException(MessageConstant.ORDER_STATUS_ERROR);
+    }
+    Orders orders = new Orders();
+    orders.setId(id);
+    // 更新状态为派送中
+    orders.setStatus(Orders.DELIVERY_IN_PROGRESS);
+    orders.setDeliveryTime(LocalDateTime.now());
+    orderMapper.update(orders);
+}
+```
+
+****
+# 十六、订单状态定时处理、来单提醒和客户催单
+
+## 1. Spring Task
+
+Spring Task 是 Spring 提供的一种轻量级任务调度工具，主要用于定时任务的开发，适用于轻量级项目中的任务调度功能。Spring Task 基于 @Scheduled 注解和 Spring 容器实现定时执行任务、循环任务等需求。
+例如信用卡每月还款提醒、银行贷款每月还款提醒以及火车票售票系统处理未支付订单，只要是需要定时处理的场景都可以使用 Spring Task。
+
+### 1.1 Cron 表达式
+
+Cron 表达式其实就是一个字符串，通过 Cron 表达式可以定义任务触发的时间，Cron 由 6 个字段组成：
+
+```text
+// Spring 不支持第 7 位“年”字段（Quartz 支持）
+秒 分 时 日 月 星期
+```
+
+| 字段顺序 | 字段名称 | 取值范围           | 示例                          |
+| ---- | ---- |----------------|-----------------------------|
+| 1    | 秒    | 0–59           | 0, 15, 30, \*               |
+| 2    | 分    | 0–59           | 0, 10, 45, \*               |
+| 3    | 时    | 0–23           | 8, 12, 23, \*               |
+| 4    | 日    | 1–31           | 1, 15, 31, \*               |
+| 5    | 月    | 1–12 或 JAN–DEC | 1, 6, 12, \*                |
+| 6    | 星期   | 1–7 或 SUN–SAT  | 7(SUN), 1(MON), ..., 6(SAT) |
+
+特殊符号说明：
+
+| 符号  | 含义                               |
+| --- |----------------------------------|
+| `*` | 任意值（通配符）                         |
+| `?` | 仅用于“日”和“星期”字段之一，表示“不指定”该字段的值     |
+| `-` | 表示范围，如 `10-12` 表示 10 到 12        |
+| `,` | 列出多个值，如 `1,3,5` 表示 1、3、5         |
+| `/` | 表示增量，如 `0/5` 表示从 0 开始每隔 5 个单位    |
+| `L` | 表示最后一个，如 `L` 代表“当月最后一天”或“周六”     |
+| `W` | 表示“最近的工作日”（非周末）                  |
+| `#` | 表示“星期几#第几个”，如 `2#1` 表示“每月第一个星期二” |
+
+常见表达式：
+
+  秒分时日月星期
+
+- 0 0 0 * * ?：每天凌晨 0 点执行
+- 0 0/5 * * * ?：每 5 分钟执行一次
+- 0 0 8,12,18 * * ?：每天的 8、12、18 点执行
+- 0 0 0 1 * ?：每月 1 号凌晨执行
+- 0 0 0 L * ?：每月最后一天执行
+- 0 0 0 ? * 1：每周一凌晨 0 点执行
+- 0 0 0 ? * 1：每周一凌晨 0 点执行
+- 0 15 10 ? * MON-FRI：每周一到周五 10:15 执行
+- 0 0 10 ? * 2#1：每月第一个星期二 10:00 执行
+- */10 * * * * ?：每 10 秒执行一次
+- 0 0/30 8-18 * * ?：每天 8 点到 18 点之间每半小时执行一次
+- 0 0 0 15W * ?：每月 15 日最近的工作日（不是周末）
+
+需要注意的是：日和星期两个字段不能同时指定值，否则会冲突，所以必须一个是值，另一个用 ?，例如 * ? 表示每天，不限制星期几；? 1 表示不指定日期，只在每周一执行。
+
+使用：
+
+在启动类上添加 @EnableScheduling 注解，然后创建定时任务类，使用 @Scheduled 注解定义任务方法：
+
+```java
+@Slf4j
+@Component
+public class MyTask {
+    @Scheduled(cron = "0/5 * * * * ?")
+    public void executeTask(){
+        log.info("定时任务开始执行：{}", LocalDateTime.now());
+    }
+}
+```
+
+当程序运行时，每五秒就会打印一次日志。
+
+****
+## 2. 订单状态定时处理
+
+用户下单后可能存在的情况：
+
+- 下单后未支付，订单一直处于“待支付”状态
+- 用户收货后管理端未点击完成按钮，订单一直处于“派送中”状态
+
+对于上面两种情况需要通过定时任务来修改订单状态，具体逻辑为：
+
+- 通过定时任务每分钟检查一次是否存在支付超时订单（下单后超过15分钟仍未支付则判定为支付超时订单），如果存在则修改订单状态为“已取消”
+- 通过定时任务每天凌晨 1 点检查一次是否存在“派送中”的订单，如果存在则修改订单状态为“已完成”
+
+自定义定时任务类 OrderTask：
+
+每分钟检查一次，对 Order 表进行一次查询，根据当前时间 - 15 分钟和下单时间进行对比，判断是否超时支付。
+
+```java
+// 处理支付超时订单
+@Scheduled(cron = "0 * * * * ?")
+public void processTimeoutOrder(){
+  log.info("处理支付超时订单：{}", LocalDateTime.now());
+  // 计算当前时间的前 15 分钟，作为超时支付订单
+  LocalDateTime time = LocalDateTime.now().plusMinutes(-15);
+  // select * from orders where status = 1 and order_time < 当前时间-15分钟
+  List<Orders> ordersList = orderMapper.getByStatusAndOrdertimeLT(Orders.PENDING_PAYMENT, time);
+  if(ordersList != null && !ordersList.isEmpty()){
+    ordersList.forEach(order -> {
+      // 设置新状态
+      order.setStatus(Orders.CANCELLED);
+      order.setCancelReason("支付超时，自动取消");
+      order.setCancelTime(LocalDateTime.now());
+      orderMapper.update(order);
+    });
+  }
+}
+```
+
+```java
+// 每天凌晨 1 点处理“派送中”状态的订单
+@Scheduled(cron = "0 0 1 * * ?")
+public void processDeliveryOrder(){
+    log.info("处理派送中订单：{}", LocalDateTime.now());
+    // select * from orders where status = 4 and order_time < 当前时间-1小时
+    // 超过一小时没送达判定为超时
+    LocalDateTime time = LocalDateTime.now().plusMinutes(-60);
+    List<Orders> ordersList = orderMapper.getByStatusAndOrdertimeLT(Orders.DELIVERY_IN_PROGRESS, time);
+    if(ordersList != null && !ordersList.isEmpty()){
+        ordersList.forEach(order -> {
+            order.setStatus(Orders.COMPLETED);
+            orderMapper.update(order);
+        });
+    }
+}
+```
+
+需要注意的是：Spring 的 @Scheduled 方法默认是由一个单线程调度器执行的，这意味着如果两个定时任务恰好时间重合，它们会一个一个顺序执行，不会并发运行。
+所以在凌晨 1 点，两个任务都会被触发，不会阻塞，但谁先谁后取决于调度器中哪个任务先被调度到了。
+
+****
+## 3. WebSocket
+
+WebSocket 是基于 TCP 的一种新的网络协议。它实现了浏览器与服务器全双工通信——浏览器和服务器只需要完成一次握手，两者之间就可以创建持久性的连接，
+并进行双向数据传输。在 WebSocket 出现前，浏览器和服务器通信主要通过 HTTP 协议，但 HTTP 是单向通信，只有客户端发送请求，服务器才能响应；所以它无法实现实时推送数据，
+需要客户端定时轮询。而 WebSocket 的全双工通信可以保证客户端与服务器之间可以互相主动发送消息，而不必等待对方请求，常用于即时聊天、在线游戏、弹幕等实时系统。
+
+实现全双工通信 —— 浏览器可以主动发送消息给服务器，服务器也可以主动推送消息给浏览器：
+
+1). 直接使用 websocket.html 页面作为 WebSocket 客户端
+
+2). 导入 WebSocket 的 maven 坐标
+
+3). 导入 WebSocket 服务端组件 WebSocketServer，用于和客户端通信
+
+4). 导入配置类 WebSocketConfiguration，注册 WebSocket 的服务端组件
+
+5). 导入定时任务类 WebSocketTask，定时向客户端推送数据
+
+websocket.html 页面：
+
+```html
+<!DOCTYPE HTML>
+<html>
+...
+<script type="text/javascript">
+    var websocket = null;
+    var clientId = Math.random().toString(36).substr(2);
+
+    // 判断当前浏览器是否支持 WebSocket
+    if('WebSocket' in window){
+        // 连接 WebSocket 节点
+        websocket = new WebSocket("ws://localhost:8080/ws/"+clientId);
+    }
+    else{
+        alert('Not support websocket')
+    }
+
+    // 连接发生错误的回调方法
+    websocket.onerror = function(){
+        setMessageInnerHTML("error");
+    };
+
+    // 连接成功建立的回调方法
+    websocket.onopen = function(){
+        setMessageInnerHTML("连接成功");
+    }
+
+    // 接收到消息的回调方法
+    websocket.onmessage = function(event){
+        setMessageInnerHTML(event.data);
+    }
+
+    // 连接关闭的回调方法
+    websocket.onclose = function(){
+        setMessageInnerHTML("close");
+    }
+
+    // 监听窗口关闭事件，当窗口关闭时，主动去关闭 websocket 连接，防止连接还没断开就关闭窗口，server 端会抛异常。
+    window.onbeforeunload = function(){
+        websocket.close();
+    }
+
+    // 将消息显示在网页上
+    function setMessageInnerHTML(innerHTML){
+        document.getElementById('message').innerHTML += innerHTML + '<br/>';
+    }
+
+    // 发送消息
+    function send(){
+        var message = document.getElementById('text').value;
+        websocket.send(message);
+    }
+	
+	// 关闭连接
+    function closeWebSocket() {
+        websocket.close();
+    }
+</script>
+</html>
+```
+
+定义 [WebSocket](./sky-server/src/main/java/com/sky/websocket/WebSocketServer.java) 服务端组件:
+
+```java
+// 存放会话对象
+private static Map<String, Session> sessionMap = new HashMap();
+
+// 连接建立成功调用的方法
+@OnOpen
+public void onOpen(Session session, @PathParam("sid") String sid) {
+    System.out.println("客户端：" + sid + "建立连接");
+    sessionMap.put(sid, session);
+}
+
+// 收到客户端消息后调用的方法
+@OnMessage
+public void onMessage(String message, @PathParam("sid") String sid) {
+    System.out.println("收到来自客户端：" + sid + "的信息:" + message);
+}
+
+// 连接关闭调用的方法
+@OnClose
+public void onClose(@PathParam("sid") String sid) {
+    System.out.println("连接断开:" + sid);
+    sessionMap.remove(sid);
+}
+
+// 群发
+public void sendToAllClient(String message) {
+    Collection<Session> sessions = sessionMap.values();
+    for (Session session : sessions) {
+        try {
+            // 服务器向客户端发送消息
+            session.getBasicRemote().sendText(message);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+因为 WebSocket 不走 Spring MVC，所以需要注册 WebSocket 组件：
+
+```java
+@Configuration
+public class WebSocketConfiguration {
+    @Bean
+    public ServerEndpointExporter serverEndpointExporter() {
+        return new ServerEndpointExporter();
+    }
+}
+```
+
+设置定时任务推送消息，利用 SpringTask 定时向客户端推送实时信息：
+
+```java
+// 通过 WebSocket 每隔 5 秒向客户端发送消息
+@Scheduled(cron = "0/5 * * * * ?")
+public void sendMessageToClient() {
+    webSocketServer.sendToAllClient("这是来自服务端的消息：" + DateTimeFormatter.ofPattern("HH:mm:ss").format(LocalDateTime.now()));
+}
+```
+
+****
+## 4. 来单提醒
+
+通过 WebSocket 实现管理端页面和服务端保持长连接状态，当客户支付后调用 WebSocket 的相关 API 实现服务端向客户端推送消息，客户端浏览器解析服务端推送的消息，
+判断是来单提醒还是客户催单，进行相应的消息提示和语音播报。这里约定服务端发送给客户端浏览器的数据格式为 JSON，字段包括 type（消息类型，1为来单提醒 2为客户催单），
+orderId（订单id），content（消息内容）
+
+因为下单并支付成功后就需要向商家发送消息，所以需要在支付成功的那个方法里面注入 WebSocketServer 对象，然后把相关信息推送给浏览器。
+
+```java
+// 在 paySuccess() 方法中添加 WebSocket
+Map map = new HashMap();
+map.put("type", 1);// 消息类型，1 表示来单提醒
+map.put("orderId", orders.getId());
+map.put("content", "订单号：" + outTradeNo);
+// 通过 WebSocket 实现来单提醒，向客户端浏览器推送消息
+webSocketServer.sendToAllClient(JSON.toJSONString(map));
+```
+
+****
+## 5. 客户催单
+
+该功能与上面的类似，都是通过 WebSocket 实现管理端页面和服务端保持长连接状态，当用户点击催单按钮后，调用 WebSocket 的相关 API 实现服务端向客户端推送消息，
+但因为催单是一个新功能，所以它是发送一次请求。
+
+Controller 层：
+
+```java
+@GetMapping("/reminder/{id}")
+@Operation(summary = "用户催单")
+public Result reminder(@PathVariable("id") Long id) {
+    orderService.reminder(id);
+    return Result.success();
+}
+```
+
+Service 层：
+
+具体逻辑和来单提醒一样，都是讲相关信息发送给浏览器。
+
+```java
+@Override
+public void reminder(Long id) {
+    // 查询订单是否存在
+    Orders orders = orderMapper.getById(id);
+    if (orders == null) {
+        throw new OrderBusinessException(MessageConstant.ORDER_NOT_FOUND);
+    }
+    // 基于 WebSocket 实现催单
+    Map map = new HashMap();
+    map.put("orderId", id);
+    map.put("type", 2); // 2 代表用户催单
+    map.put("content", "订单号：" + orders.getNumber());
+    webSocketServer.sendToAllClient(JSON.toJSONString(map));
+}
+```
+
+****
+# 十七、统计
+
+## 1. Apache ECharts
+
+Apache ECharts 是一款基于 Javascript 的数据可视化图表库，提供直观，生动，可交互，可个性化定制的数据可视化图表。官网地址：[https://echarts.apache.org/zh/index.html](https://echarts.apache.org/zh/index.html)
+
+入门案例：
+
+1). 引入 echarts.js 文件
+
+2). 为 ECharts 准备一个设置宽高的 DOM
+
+3). 初始化 echarts 实例
+
+4). 指定图表的配置项和数据
+
+5). 使用指定的配置项和数据显示图表
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ECharts</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <!-- 为 ECharts 准备一个定义了宽高的 DOM -->
+    <div id="main" style="width: 600px;height:400px;"></div>
+    <script type="text/javascript">
+      // 基于准备好的dom，初始化echarts实例
+      var myChart = echarts.init(document.getElementById('main'));
+
+      // 指定图表的配置项和数据
+      var option = {
+        title: {
+          text: 'ECharts 入门示例'
+        },
+        tooltip: {}, // 鼠标悬停时的提示框。空对象表示启用默认样式
+        legend: {
+          data: ['销量'] // 图例区域，这里用于显示系列“销量”的标识
+        },
+        // x轴的数据，表示横轴标签（商品种类）
+        xAxis: { 
+          data: ['衬衫', '羊毛衫', '雪纺衫', '裤子', '高跟鞋', '袜子']
+        },
+        // y轴（纵轴）采用默认配置
+        yAxis: {},
+        // 系列数据，决定图表展示内容
+        series: [
+          {
+            name: '销量', // 图例名称
+            type: 'bar', // 图表类型：bar 表示柱状图
+            data: [5, 20, 36, 10, 10, 20] // 每种商品对应的销量
+          }
+        ]
+      };
+
+      // 使用刚指定的配置项和数据显示图表。
+      myChart.setOption(option);
+    </script>
+  </body>
+</html>
+```
+
+****
+## 2. 营业额统计
+
+营业额统计是基于折现图来展现，并且按照天来展示的，也就是某一个时间范围之内的每一天的营业额。同时，不管光标放在哪个点上，它都会把具体的数值展示出来。
+并且还需要注意日期并不是固定写死的，是由上边时间选择器来决定。比如选择是近7天、或者是近30日，或者是本周，就会把相应这个时间段之内的每一天的日期通过横坐标展示。
+
+具体返回数据一般由前端来决定，前端展示图表，具体折现图对应数据是什么格式是有固定的要求的。所以说，后端需要去适应前端，它需要什么格式的数据，就给它返回什么格式的数据。
+而这个营业额统计功能，前端要求返回的是日期列表（日期之间以逗号分隔）和营业额列表（营业额之间以逗号分隔），它们两个用 String 接收。
+
+Controller 层：
+
+```java
+@GetMapping("/turnoverStatistics")
+@Operation(summary = "营业额数据统计")
+public Result<TurnoverReportVO> turnoverStatistics(
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate begin,
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate end) {
+    return Result.success(reportService.getTurnover(begin, end));
+}
+```
+
+Service 层：
+
+统计日期就是根据前端发送的起始日期和结束日期，统计有哪些具体的日期（当天的前一天为最新的数据），然后把这些日期放入集合中；后面可以从这个集合中拿出具体的一天，然后根据这一天作为查询 order 表的条件，
+统计每一条查出来的订单信息的金额，把金额也放进一个集合，最后统一对这两个集合转换成字符串，用逗号拼接每一天的详细，例如 2025-10-01，2-25-10-02...对应 406，1024...
+
+```java
+@Override
+public TurnoverReportVO getTurnover(LocalDate begin, LocalDate end) {
+    // 当前集合存放从 begin 到 end 范围内的每天的日期
+    List<LocalDate> dates = new ArrayList<>();
+    dates.add(begin);
+    while (!begin.equals(end)){
+        begin = begin.plusDays(1);//日期计算，获得指定日期后1天的日期
+        dates.add(begin);
+    }
+    // 查询对应每天的营业额
+    List<Double> turnoverList = new ArrayList<>();
+    for (LocalDate date : dates) {
+        // 因为 order 表中的下单时间格式为 年月日 时分秒，所以也需要按照这样的格式去查询
+        LocalDateTime beginTime = LocalDateTime.of(date, LocalTime.MIN); // 获取当天的最早时间 00:00:00
+        LocalDateTime endTime = LocalDateTime.of(date, LocalTime.MAX); // 获取当天最晚时间 23:59:59
+        Map map = new HashMap();
+        // 统计营业额需要查询订单状态为已完成的
+        map.put("status", Orders.COMPLETED);
+        map.put("begin",beginTime);
+        map.put("end", endTime);
+        // select sum(amount) from orders where order_time > ? and order_time < ? and status = 5
+        Double turnover = orderMapper.sumByMap(map);
+        turnover = turnover == null ? 0.0 : turnover;
+        turnoverList.add(turnover);
+    }
+    return TurnoverReportVO.builder()
+            .dateList(StringUtils.join(dates,","))
+            .turnoverList(StringUtils.join(turnoverList,","))
+            .build();
+}
+```
+
+****
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
