@@ -4035,6 +4035,567 @@ public TurnoverReportVO getTurnover(LocalDate begin, LocalDate end) {
 ```
 
 ****
+## 3. 用户统计
+
+用户统计统计的是用户的数量，通过折线图来展示，一根线代表的是用户总量，一根线代表的是新增用户数量，所以说用户统计主要统计两个数据，一个是总的用户数量，
+另外一个是新增用户数量，具体到每一天。所以前端是根据时间选择区间，然后对应展示这两个数据。后端则需要返回新增用户和总用户列表，用 String 接收后返回。
+
+Controller 层：
+
+```java
+@GetMapping("/userStatistics")
+@Operation(summary = "用户数据统计")
+public Result<UserReportVO> userStatistics(
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate begin,
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate end){
+    return Result.success(reportService.getUserStatistics(begin,end));
+}
+```
+
+Service 层：
+
+这里也是讲范围内的每一天都添加到集合中，再从集合中取出每一天对应的新增人数和用户总量，然后讲集合中的元素拼接成字符串。
+```java
+@Override
+public UserReportVO getUserStatistics(LocalDate begin, LocalDate end) {
+    // 讲开始日期到结束日期的所有日期添加到集合中
+    List<LocalDate> dateList = new ArrayList<>();
+    dateList.add(begin);
+    while (!begin.equals(end)){
+        begin = begin.plusDays(1);
+        dateList.add(begin);
+    }
+
+    List<Integer> newUserList = new ArrayList<>(); // 新增用户数
+    List<Integer> totalUserList = new ArrayList<>(); // 总用户数
+    for (LocalDate date : dateList) {
+        LocalDateTime beginTime = LocalDateTime.of(date, LocalTime.MIN);
+        LocalDateTime endTime = LocalDateTime.of(date, LocalTime.MAX);
+        // 新增用户数量 select count(id) from user where create_time > ? and create_time < ?
+        Integer newUser = getUserCount(beginTime, endTime);
+        // 总用户数量截止目前日期的所有用户量，所以可以不用考虑起始日期
+        // select count(id) from user where  create_time < ?
+        Integer totalUser = getUserCount(null, endTime);
+        newUserList.add(newUser);
+        totalUserList.add(totalUser);
+    }
+    return UserReportVO.builder()
+            .dateList(StringUtils.join(dateList,","))
+            .newUserList(StringUtils.join(newUserList,","))
+            .totalUserList(StringUtils.join(totalUserList,","))
+            .build();
+}
+
+private Integer getUserCount(LocalDateTime beginTime, LocalDateTime endTime) {
+    Map map = new HashMap();
+    map.put("begin",beginTime);
+    map.put("end", endTime);
+    return userMapper.countByMap(map);
+}
+```
+
+****
+## 4. 订单统计
+
+订单统计通过一个折现图来展现，一线代表的是订单总数，一根线代表的是有效订单数（状态为已完成的订单就属于有效订单），分别反映的是每一天的数据。
+在折线图的上面还有 3 个数字，分别统计订单总数、有效订单、订单完成率，它统计的是整个时间区间之内总的数据。所以在返回属性的封装上，除了正常统计的日期、每日订单、有效订单集合，
+还需要统计总的订单数和总的有效订单，然后计算它们的完成率（有效订单数 / 总订单数 * 100%）。
+
+Controller 层：
+
+```java
+@GetMapping("/ordersStatistics")
+@Operation(summary = "用户数据统计")
+public Result<OrderReportVO> orderStatistics(
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate begin,
+        @DateTimeFormat(pattern = "yyyy-MM-dd")
+        LocalDate end){
+
+    return Result.success(reportService.getOrderStatistics(begin,end));
+}
+```
+
+Service 层：
+
+这里的统计与上面的类似，统计每天的数据然后累加返回。
+
+```java
+@Override
+public OrderReportVO getOrderStatistics(LocalDate begin, LocalDate end) {
+    List<LocalDate> dates = new ArrayList<>();
+    dates.add(begin);
+    while (!begin.equals(end)){
+        begin = begin.plusDays(1);//日期计算，获得指定日期后1天的日期
+        dates.add(begin);
+    }
+    // 每日订单总数集合
+    List<Integer> orderCountList = new ArrayList<>();
+    // 每日有效订单数集合
+    List<Integer> validOrderCountList = new ArrayList<>();
+    // 时间区间内的总订单数
+    Integer totalOrderCount = 0;
+    // 时间区间内的总有效订单数
+    Integer validTotalOrderCount = 0;
+    // 订单完成率
+    Double orderCompletionRate = 0.0;
+    for (LocalDate date : dates) {
+        LocalDateTime beginTime = LocalDateTime.of(date, LocalTime.MIN);
+        LocalDateTime endTime = LocalDateTime.of(date, LocalTime.MAX);
+        // 查询每天的总订单数 select count(id) from orders where order_time > ? and order_time < ?
+        Integer orderCount = getOrderCount(beginTime, endTime, null);
+        // 查询每天的有效订单数 select count(id) from orders where order_time > ? and order_time < ? and status = ?
+        Integer validOrderCount = getOrderCount(beginTime, endTime, Orders.COMPLETED);
+        orderCountList.add(orderCount);
+        validOrderCountList.add(validOrderCount);
+        totalOrderCount += orderCount;
+        validTotalOrderCount += validOrderCount;
+    }
+    if(totalOrderCount != 0){
+        orderCompletionRate = validTotalOrderCount.doubleValue() / totalOrderCount;
+    }
+    return OrderReportVO.builder()
+            .dateList(StringUtils.join(dates, ","))
+            .orderCountList(StringUtils.join(orderCountList, ","))
+            .validOrderCountList(StringUtils.join(validOrderCountList, ","))
+            .totalOrderCount(totalOrderCount)
+            .validOrderCount(validTotalOrderCount)
+            .orderCompletionRate(orderCompletionRate)
+            .build();
+}
+
+private Integer getOrderCount(LocalDateTime beginTime, LocalDateTime endTime, Integer status) {
+    Map map = new HashMap();
+    map.put("begin", beginTime);
+    map.put("end", endTime);
+    map.put("status", status);
+    return orderMapper.countByMap(map);
+}
+```
+
+****
+## 5. 销量排名 Top10
+
+项目当中的商品主要包含两类：一个是套餐，一个是菜品，所以销量排名指的是菜品和套餐销售的数量排名。通过柱形图来展示销量排名，这些销量是按照降序来排列，
+并且只需要统计销量排名前十的商品。所以需要根据时间选择区间，展示销量前 10 的商品（包括菜品和套餐）。
+
+Controller 层：
+
+```java
+@GetMapping("/top10")
+@Operation(summary = "销量排名统计")
+public Result<SalesTop10ReportVO> top10(
+        @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate begin,
+        @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate end){
+
+    return Result.success(reportService.getSalesTop10(begin,end));
+}
+```
+
+Service 层：
+
+因为不需要使用日期作为坐标，所以不需要讲每天的日期添加到集合中并返回，而统计每个菜品的售出数量，只需要根据起止日期查询对应的 order_detail 表即可，
+但是 order_detail 表中没有日期字段，所以需要用到 order 表。查出数据后讲名字和数量封装进集合中，但是数量集合使用的是 Integer 类型，所以要拼接逗号的话，
+就需要先转换成 String 类型。
+
+```java
+@Override
+public SalesTop10ReportVO getSalesTop10(LocalDate begin, LocalDate end) {
+    LocalDateTime beginTime = LocalDateTime.of(begin, LocalTime.MIN);
+    LocalDateTime endTime = LocalDateTime.of(end, LocalTime.MAX);
+    List<GoodsSalesDTO> goodsSalesDTOList = orderMapper.getSalesTop10(beginTime, endTime);
+    List<String> nameList = new ArrayList<>();
+    List<Integer> numberList = new ArrayList<>();
+    for (GoodsSalesDTO goodsSalesDTO : goodsSalesDTOList) {
+        nameList.add(goodsSalesDTO.getName());
+        numberList.add(goodsSalesDTO.getNumber());
+    }
+    return SalesTop10ReportVO.builder()
+            .nameList(StringUtils.join(nameList, ","))
+            .numberList(numberList.stream()
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(",")))
+            .build();
+}
+```
+
+Mapper 层：
+
+统计每个菜品的数量，就需要使用到 group by，使用名字作为分组条件，然后根据起止日期以及已完成作为条件，查询对应的 number 字段，然后降序排序，
+此时从集合中查出的数据就是按照数量由多到少排序的，然后再限制 10 条数据，达到预期效果。
+
+```sql
+<select id="getSalesTop10" resultType="com.sky.dto.GoodsSalesDTO">
+    select od.name name,sum(od.number) number from order_detail od ,orders o
+    where od.order_id = o.id
+    and o.status = 5
+    <if test="beginTime != null">
+        and order_time &gt;= #{beginTime}
+    </if>
+    <if test="endTime != null">
+        and order_time &lt;= #{endTime}
+    </if>
+    group by name
+    order by number desc
+    limit 0, 10
+</select>
+```
+
+****
+# 十八、Excel 报表
+
+## 1. 工作台页面功能
+
+工作台是系统运营的数据看板并提供快捷操作入口，工作台展示的数据：
+
+- 今日数据
+- 订单管理
+- 菜品总览
+- 套餐总览
+- 订单信息
+
+虽然这些数据都是在一个页面中展示的，可以把这些全部封装进一个接口中，但是这样就会导致后端的代码逻辑过于复杂混乱，所以通常是相关信息的内容封装进一个接口，
+然后在该页面发送多个请求。
+
+### 1.1 今日数据接口
+
+该接口用于展示今日的营业数据，包括营业额、有效订单、订单完成率、平均客单价、新增用户，所以需要把这些数据封装进视图对象中并返回，因为这些数据只涉及一天，
+所以只需要封装成基本数据类型即可。
+
+Controller 层：
+
+```java
+@GetMapping("/businessData")
+@Operation(summary = "工作台今日数据查询")
+public Result<BusinessDataVO> businessData(){
+    // 获得当天的开始时间
+    LocalDateTime begin = LocalDateTime.now().with(LocalTime.MIN);
+    // 获得当天的结束时间
+    LocalDateTime end = LocalDateTime.now().with(LocalTime.MAX);
+    BusinessDataVO businessDataVO = workspaceService.getBusinessData(begin, end);
+    return Result.success(businessDataVO);
+}
+```
+
+Service 层：
+
+因为之前的查询数据库操作都涉及到了这些数据，所以只需要把开始和结束日期设置为当天即可，
+
+```java
+@Override
+public BusinessDataVO getBusinessData(LocalDateTime begin, LocalDateTime end) {
+    Map map = new HashMap();
+    map.put("begin",begin);
+    map.put("end",end);
+    // 查询总订单数
+    Integer totalOrderCount = orderMapper.countByMap(map);
+    map.put("status", Orders.COMPLETED);
+    // 营业额
+    Double turnover = orderMapper.sumByMap(map);
+    turnover = turnover == null? 0.0 : turnover;
+    // 有效订单数（已完成的订单）
+    Integer validOrderCount = orderMapper.countByMap(map);
+    Double unitPrice = 0.0;
+    Double orderCompletionRate = 0.0;
+    if(totalOrderCount != 0 && validOrderCount != 0){
+        // 订单完成率
+        orderCompletionRate = validOrderCount.doubleValue() / totalOrderCount;
+        // 平均客单价
+        unitPrice = turnover / validOrderCount;
+    }
+    // 新增用户数
+    Integer newUsers = userMapper.countByMap(map);
+    return BusinessDataVO.builder()
+            .turnover(turnover)
+            .validOrderCount(validOrderCount)
+            .orderCompletionRate(orderCompletionRate)
+            .unitPrice(unitPrice)
+            .newUsers(newUsers)
+            .build();
+}
+```
+
+****
+### 1.2 查询订单
+
+Controller 层：
+
+```java
+@GetMapping("/overviewOrders")
+@Operation(summary = "查询订单管理数据")
+public Result<OrderOverViewVO> orderOverView(){
+    return Result.success(workspaceService.getOrderOverView());
+}
+```
+
+Service 层：
+
+这里也是通过之前写好的查询语句，只设置当天作为查询条件，获取当天的订单数据，因为页面仅需展示简单的数字总量，所以用基本类型封装。
+
+```java
+@Override
+public OrderOverViewVO getOrderOverView() {
+    Map map = new HashMap();
+    map.put("begin", LocalDateTime.now().with(LocalTime.MIN));
+    map.put("status", Orders.TO_BE_CONFIRMED);
+    // 待接单
+    Integer waitingOrders = orderMapper.countByMap(map);
+    // 待派送
+    map.put("status", Orders.CONFIRMED);
+    Integer deliveredOrders = orderMapper.countByMap(map);
+    // 已完成
+    map.put("status", Orders.COMPLETED);
+    Integer completedOrders = orderMapper.countByMap(map);
+    // 已取消
+    map.put("status", Orders.CANCELLED);
+    Integer cancelledOrders = orderMapper.countByMap(map);
+    // 全部订单
+    map.put("status", null);
+    Integer allOrders = orderMapper.countByMap(map);
+    return OrderOverViewVO.builder()
+            .waitingOrders(waitingOrders)
+            .deliveredOrders(deliveredOrders)
+            .completedOrders(completedOrders)
+            .cancelledOrders(cancelledOrders)
+            .allOrders(allOrders)
+            .build();
+}
+```
+
+****
+### 1.3 菜品与套餐数量总览
+
+菜品与套餐仅需查询起售与停售的数量，所以只需要指定不同的在售状态作为查询条件即可，两部分代码类似。
+
+Controller 层：
+
+```java
+@GetMapping("/overviewDishes")
+@Operation(summary = "查询菜品总览")
+public Result<DishOverViewVO> dishOverView(){
+    return Result.success(workspaceService.getDishOverView());
+}
+```
+
+Service 层：
+
+```java
+@Override
+public DishOverViewVO getDishOverView() {
+    Map map = new HashMap();
+    // 查询在售
+    map.put("status", StatusConstant.ENABLE);
+    Integer sold = dishMapper.countByMap(map);
+    // 查询已停售
+    map.put("status", StatusConstant.DISABLE);
+    Integer discontinued = dishMapper.countByMap(map);
+    return DishOverViewVO.builder()
+            .sold(sold)
+            .discontinued(discontinued)
+            .build();
+}
+```
+
+****
+## 2. Apache POI
+
+Apache POI 是一个处理 Miscrosoft Office 各种文件格式的开源项目，简单来说就是可以使用 POI 在 Java 程序中对 Miscrosoft Office 各种文件进行读写操作。
+一般情况下，POI 都是用于操作 Excel 文件。例如银行网银系统导出交易明细、各种业务系统导出 Excel 报表、批量导入业务数据。
+
+导入依赖：
+
+```xml
+<dependency>
+    <groupId>org.apache.poi</groupId>
+    <artifactId>poi</artifactId>
+    <version>5.2.5</version>
+</dependency>
+<dependency>
+    <groupId>org.apache.poi</groupId>
+    <artifactId>poi-ooxml</artifactId>
+    <version>5.2.5</version>
+</dependency>
+```
+
+将数据写入 Excel 文件:
+
+```java
+public class POITest {
+    public static void write() throws Exception{
+        // 在内存中创建一个Excel文件对象
+        XSSFWorkbook excel = new XSSFWorkbook();
+        // 创建Sheet页
+        XSSFSheet sheet = excel.createSheet("test");
+        // 在Sheet页中创建行，0表示第1行
+        XSSFRow row1 = sheet.createRow(0);
+        // 创建单元格并在单元格中设置值，单元格编号也是从0开始，1表示第2个单元格
+        row1.createCell(1).setCellValue("姓名");
+        row1.createCell(2).setCellValue("城市");
+
+        XSSFRow row2 = sheet.createRow(1);
+        row2.createCell(1).setCellValue("张三");
+        row2.createCell(2).setCellValue("北京");
+
+        XSSFRow row3 = sheet.createRow(2);
+        row3.createCell(1).setCellValue("李四");
+        row3.createCell(2).setCellValue("上海");
+
+        FileOutputStream out = new FileOutputStream("D:\\POITest.xlsx");
+        // 通过输出流将内存中的 Excel 文件写入到磁盘上
+        excel.write(out);
+
+        // 关闭资源
+        out.flush();
+        out.close();
+        excel.close();
+    }
+    public static void main(String[] args) throws Exception {
+        write(); // 在 D 盘中生成 POITest.xlsx 文件，创建名称为 test 的 Sheet 页，同时将内容成功写入。
+    }
+}
+```
+
+读取 Excel 文件中的数据:
+
+```java
+public static void read() throws Exception{
+    FileInputStream in = new FileInputStream(new File("D:\\POITest.xlsx"));
+    // 通过输入流读取指定的Excel文件
+    XSSFWorkbook excel = new XSSFWorkbook(in);
+    // 获取Excel文件的第1个Sheet页
+    XSSFSheet sheet = excel.getSheetAt(0);
+    // 获取Sheet页中的最后一行的行号
+    int lastRowNum = sheet.getLastRowNum();
+    for (int i = 0; i <= lastRowNum; i++) {
+        // 获取Sheet页中的行
+        XSSFRow titleRow = sheet.getRow(i);
+        // 获取行的第2个单元格
+        XSSFCell cell1 = titleRow.getCell(1);
+        // 获取单元格中的文本内容
+        String cellValue1 = cell1.getStringCellValue();
+        // 获取行的第3个单元格
+        XSSFCell cell2 = titleRow.getCell(2);
+        // 获取单元格中的文本内容
+        String cellValue2 = cell2.getStringCellValue();
+        System.out.println(cellValue1 + " " +cellValue2);
+    }
+    // 关闭资源
+    in.close();
+    excel.close();
+}
+```
+
+****
+## 3. 导出运营数据 Excel 报表
+
+在数据统计页面有一个数据导出的按钮，点击该按钮时，就会下载一个文件，这个文件实际上是一个 Excel 形式的文件，文件中主要包含最近 30 日运营相关的数据。
+表格的形式已经固定，主要由概览数据和明细数据两部分组成。真正导出这个报表之后，相对应的数字就会填充在表格中，然后就可以进行存档。
+
+表结构如下：
+
+| 运营数据报表 |          |          |          |          |          |
+|-----------|----------|----------|----------|----------|----------|
+| 概览数据       |
+|--------------|----------|----------|----------|----------|----------|
+| 营业额    | 订单完成率 | 新增用户数 | 有效订单 | 平均客单价 |          |
+| 明细数据 |
+|--------------|----------|----------|----------|----------|----------|
+| 日期      | 营业额   | 有效订单 | 订单完成率 | 平均客单价 | 新增用户数 |
+
+因为导出的是最近 30 天的运营数据，后端计算即可，所以前端不需要传递任何请求参数；因为报表导出功能本质上是文件下载，服务端会通过输出流将 Excel 文件下载到客户端浏览器，
+所以后端也不需要返回数据，当调用到此接口时直接通过 POI 完成写入与下载即可。
+
+Controller 层：
+
+虽然前端没有携带请求参数，但是这个接口的主要作用是导出 Excel 文件并直接将文件返回给前端下载，所以需要通过 HttpServletResponse 来向浏览器发送 Excel 文件流，而不是处理前端传递的参数。
+
+```java
+@GetMapping("/export")
+@Operation(summary = "导出运营数据报表")
+public void export(HttpServletResponse response){
+    reportService.exportBusinessData(response);
+}
+```
+
+Service 层：
+
+```java
+@Override
+public void exportBusinessData(HttpServletResponse response) {
+    // 获取当前系统日期向前推 30 天
+    LocalDate begin = LocalDate.now().minusDays(30);
+    // 获取当前系统日期向前推 1 天
+    LocalDate end = LocalDate.now().minusDays(1);
+    // 查询概览运营数据（工作台获取的概览数据），提供给 Excel 模板文件
+    BusinessDataVO businessData = workspaceService.getBusinessData(LocalDateTime.of(begin,LocalTime.MIN), LocalDateTime.of(end, LocalTime.MAX));
+    // 通过输入流读取模板文件
+    InputStream inputStream = this.getClass().getClassLoader().getResourceAsStream("template/运营数据报表模板.xlsx");
+    try {
+        // 基于提供好的模板文件创建一个新的 Excel 表格对象
+        XSSFWorkbook excel = new XSSFWorkbook(inputStream);
+        // 获得 Excel 文件中的一个 Sheet 页
+        XSSFSheet sheet = excel.getSheet("Sheet1");
+        // 将日期填充到 Excel 文件的第二行的第二个单元格
+        sheet.getRow(1).getCell(1).setCellValue(begin + "至" + end);
+        // 获得第 4 行
+        XSSFRow row = sheet.getRow(3);
+        // 获取单元格
+        // 第三个单元格填充营业额
+        row.getCell(2).setCellValue(businessData.getTurnover());
+        // 第五个单元格填充订单完成率
+        row.getCell(4).setCellValue(businessData.getOrderCompletionRate());
+        // 第七个单元格填充新增用户
+        row.getCell(6).setCellValue(businessData.getNewUsers());
+        // 获取第五行
+        row = sheet.getRow(4);
+        // 第三个单元格填充有效订单
+        row.getCell(2).setCellValue(businessData.getValidOrderCount());
+        // 第五个单元格填充平均单价
+        row.getCell(4).setCellValue(businessData.getUnitPrice());
+        // 获取一个月中每天的详细营业数据
+        for (int i = 0; i < 30; i++) {
+            // 循环遍历每个日期，每次加一天
+            LocalDate date = begin.plusDays(i);
+            // 获取当日的详细数据
+            businessData = workspaceService.getBusinessData(LocalDateTime.of(date,LocalTime.MIN), LocalDateTime.of(date, LocalTime.MAX));
+            // 初始数据从第八行开始填充，下一天的数据填充到下一行
+            row = sheet.getRow(7 + i);
+            // 第二个单元格填充日期
+            row.getCell(1).setCellValue(date.toString());
+            // 第三个单元格填充当日营业额
+            row.getCell(2).setCellValue(businessData.getTurnover());
+            // 第四个单元格填充当日有效订单
+            row.getCell(3).setCellValue(businessData.getValidOrderCount());
+            // 第五个单元格填充当日订单完成率
+            row.getCell(4).setCellValue(businessData.getOrderCompletionRate());
+            // 第六个单元格填充当日平均单价
+            row.getCell(5).setCellValue(businessData.getUnitPrice());
+            // 第七个单元格填充新增用户
+            row.getCell(6).setCellValue(businessData.getNewUsers());
+        }
+        // 获取当前 HTTP 响应的输出流
+        ServletOutputStream out = response.getOutputStream();
+        // 将内存中的 Excel 文件内容写入 ServletOutputStream 输出流，也就是写入 HTTP 响应体中
+        excel.write(out);
+        // 关闭资源
+        out.flush();
+        out.close();
+        excel.close();
+    }catch (IOException e){
+        e.printStackTrace();
+    }
+}
+```
+
+****
+
+
+
+
+
+
 
 
 
