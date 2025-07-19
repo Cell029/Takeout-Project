@@ -4590,8 +4590,1103 @@ public void exportBusinessData(HttpServletResponse response) {
 ```
 
 ****
+# 十九、Vue 基础用法
+
+## 1. 基于脚手架创建前端工程
+
+要想基于脚手架创建前端工程，需要具备如下环境要求：
+
+- node.js：前端项目的运行环境
+- npm：JavaScript 的包管理工具
+- Vue CLI：基于 Vue 进行快速开发的完整系统，实现交互式的项目脚手架
+
+```shell
+-- 查看 node 版本号
+node -v
+v18.20.7
+-- 查看 npm 版本
+npm -v
+10.8.2
+-- 查看 Vue CLI 版本
+vue --version
+@vue/cli 5.0.8
+```
+
+使用 Vue CLI 创建前端工程的方式：
+
+- 方式一：vue create 项目名称
+- 方式二：vue ui
+
+1、在命令行输入命令 vue ui，启动命令后，Vue CLI 会在本地启动一个 Web 服务器，打开浏览器并访问 http://localhost:8000
+
+```shell
+vue ui
+```
+
+2、点击“在此创建新项目”按钮，跳转到创建新项目设置页面
+
+3、填写项目名称、选择包管理器为 npm，点击“下一步”按钮
+
+4、选择 Default(Vue 2)，点击"创建项目"按钮，完成项目的创建
+
+工程目录：
+
+```text
+# 文件夹
+node_modules
+public
+src
+.git
+.babelrc
+.editorconfig
+.eslintrc.js
+.gitignore
+babel.config.js
+package-lock.json
+package.json
+postcss.config.js
+README.md
+tailwind.config.js
+tsconfig.json
+vue.config.js
+```
+
+- node_modules：当前项目依赖的js包
+- assets：静态资源存放目录
+- components：公共组件存放目录
+- App.vue：项目的主组件，页面的入口文件
+- main.js：整个项目的入口文件
+- package.json：项目的配置信息、依赖包管理
+- vue.config.js：vue-cli 配置文件
+
+创建好后，进入该项目目录，执行 npm run serve 启动前端工程：
+
+```shell
+npm run serve
+
+> demo-1@0.1.0 serve
+> vue-cli-service serve
+
+ INFO  Starting development server...
+ DONE  Compiled successfully in 6288ms                                                                          
+
+  App running at:
+  - Local:   http://localhost:8080/
+  - Network: http://192.168.0.111:8080/
+
+  Note that the development build is not optimized.
+  To create a production build, run npm run build.
+```
+
+然后访问 http://localhost:8080/ 即可看到 Vue 的默认页面，即访问成功。但通常 8080 端口会被后端占用，所以可以在 vue.config.js 中配置前端服务端口号：
+
+```js
+const { defineConfig } = require('@vue/cli-service')
+module.exports = defineConfig({
+    transpileDependencies: true,
+    devServer: {
+    port: 7070 // 指定前端服务端口号
+  }
+})
+```
+
+****
+## 2. Vue 基本使用
+
+### 2.1 vue 组件
+
+Vue 的组件文件以 .vue 结尾，每个组件由三部分组成：
+
+- `<template>`：组件的结构部分（视图层），用于定义组件的 HTML 结构，也就是页面中将要渲染的内容。
+- `<style>`：组件的逻辑部分，用于定义组件的行为和状态，包括数据属性、方法、计算属性、生命周期钩子等。
+- `<script>`：组件的样式部分（CSS 样式），为组件添加样式，默认是全局样式；可使用 scoped 属性限制样式只作用于当前组件。
+
+一个完整的 Vue 单文件组件示例：
+
+```vue
+<template>
+  <div class="hello">
+    <h1>{{ message }}</h1>
+    <button @click="toggle">切换</button>
+    <p v-if="show">显示内容</p>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'HelloWorld',
+  data() {
+    return {
+      message: '欢迎使用 Vue!',
+      show: true
+    }
+  },
+  methods: {
+    toggle() {
+      this.show = !this.show
+    }
+  }
+}
+</script>
+
+<style scoped>
+.hello {
+  padding: 20px;
+  background: #f0f0f0;
+}
+</style>
+```
+
+****
+### 2.2 文本插值
+
+使用 `{{插值表达式}}` 来绑定 data 方法返回的对象属性，例如：
+
+```vue
+<template>
+  <div>
+    <h1>{{ name }}</h1>
+    <h1>{{ age > 60 ? '老年' : '青年' }}</h1>
+  </div>
+</template>
+
+<script>
+  export default {
+    data() {
+      return { name: '张三', age: 30 };
+    }
+  }
+</script>
+```
+
+data() 是一个函数，Vue 组件通过它来定义组件的响应式数据，它返回一个对象，对象中的每个属性会被 Vue 处理成响应式数据，并自动挂载到组件实例上。Vue 框架在内部做了一层代理和响应式绑定，
+可以在模板中无需使用 this.name 或 this.age 就能直接访问 data 中的变量。
+
+****
+### 2.3 属性绑定
+
+使用 v-bind:xxx（简写为 :xxx）为标签的属性绑定 data 方法中返回的属性，例如：
+
+```vue
+<div>
+  <div><input type="text" v-bind:value="name"></div>
+  <div><input type="text" :value="age"></div>
+  <div><img :src="src"/></div>
+</div>
+
+<script>
+export default {
+  export default {
+      data () {
+          return {
+              name: '王五',
+              age: 20,
+              src: 'https://www.itcast.cn/2018czgw/images/logo2.png'
+          };
+      }
+  }
+}
+</script>
+```
+
+****
+### 2.4 事件绑定
+
+使用 v-on:xxx（简写为 @xxx）为元素绑定对应的事件，例如：
+
+```vue
+<div>
+  <div>
+    <input type="button" value="保存" v-on:click="handleSave"/>
+    <input type="button" value="保存" @click="handleSave"/><br>
+  </div>
+</div>
+
+<script>
+export default {
+  methods: {
+    handleSave() {
+      alert(this.name)
+    }
+  }
+}
+</script>
+```
+
+****
+### 2.5 双向绑定
+
+使用 v-model 后会将表单输入项和 data 方法中的属性进行绑定，任意一方改变都会同步给另一方，例如：
+
+```vue
+<div>
+  双向绑定: {{ name }}
+  <input type="text" v-model="name" />
+  <input type="button" value="改变" @click="handleChange"/>
+</div>
+
+<script>
+export default {
+  methods: {
+    handleChange() {
+      alert('你输入的是：' + this.name);
+    }
+  }
+}
+</script>
+```
+
+当在输入框中修改内容时，所有的 name 字段都会同步更新。
+
+****
+### 2.6 条件渲染
+
+使用 v-if、v-else、v-else-if 可以根据表达式的值来动态渲染页面元素，例如：
+
+```vue
+<div>
+  <div v-if="sex === 1">
+    男
+  </div>
+  <div v-else-if="sex === 2">
+    女
+  </div>
+  <div v-else>
+    未知
+  </div>
+</div>
+
+<script>
+  export default {
+    data() {
+      return { sex: 1 }
+    }
+  }
+</script>
+```
+
+****
+### 2.7 axios
+
+Axios 是一个基于 Promise 的 HTTP 客户端，用于浏览器和 Node.js 中发送 HTTP 请求，在 Vue 项目中经常用于和后端交互。
+
+安装和引入：
+
+1、安装
+
+```shell
+npm install axios
+```
+
+2、引入
+
+```shell
+import axios from 'axios';
+```
+
+axios 的 API 列表：
+
+- axios.get(url[, config])
+- axios.delete(url[, config])
+- axios.head(url[, config])
+- axios.options(url[, config])
+- axios.post(url[, data[, config]])
+- axios.put(url[, data[, config]])
+- axios.patch(url[, data[, config]])
+
+参数说明：
+
+- url：请求路径
+- data：请求体数据，最常见的是 JSON 格式数据
+- config：配置对象，可以设置查询参数、请求头信息
+  - params：请求 URL 的查询参数（会自动序列化为 ?key=value） 
+  - headers：自定义请求头 
+  - timeout：请求超时时间（毫秒） 
+  - responseType：响应数据类型，如 'json'、'blob' 等 
+  - withCredentials：是否允许跨域请求时携带凭证（cookies）
+
+在使用 axios 时经常会遇到跨域问题，为了解决跨域问题，可以在 vue.config.js 文件中配置代理：
+
+```js
+const { defineConfig } = require('@vue/cli-service')
+module.exports = defineConfig({
+    transpileDependencies: true,
+    devServer: {
+        port: 7070,
+        // 匹配以 /api 开头的请求路径，把该请求转发到目标后端服务器地址
+        proxy: {
+            '/api': {
+                target: 'http://localhost:8080',
+                // 重写请求路径，将 /api 前缀移除。例如：前端请求 /api/users 会被转发到 http://localhost:8080/users
+                pathRewrite: {
+                  '^/api': ''
+              }
+          }
+      }
+  }
+})
+```
+
+axios 提供的统一使用方式示例：
+
+```vue
+<script>
+  export default {
+    methods: {
+      sendAxios() {
+        axios({
+          method: 'post', // 发送 post 请求
+          url: '/user/12345',
+          data: { // 请求体中包含的 JSON 数据
+            firstName: 'Fred',
+            lastName: 'Flintstone'
+          }
+        });
+      }
+    }
+  }
+</script>
+```
+
+```vue
+<script>
+  export default {
+    methods: {
+      sendAxios() {
+        axios({
+          url: '/api/admin/employee/login',
+          method:'post',
+          data: {
+              username:'admin',
+            password: '123456'
+          }
+          // 请求成功后的回调，res 是响应对象
+        }).then((res) => {
+            // 
+            console.log(res.data.data.token)
+          axios({
+            url: '/api/admin/shop/status',
+            method: 'get',
+            params: {id: 100},
+            headers: {
+                token: res.data.data.token
+            }
+          })
+        }).catch((error) => {
+            console.log(error)
+        })
+      }
+    }
+  }
+</script>
+```
+
+当使用 Axios 发请求后，返回的响应 res 是一个复杂的对象，大致结构如下：
+
+```vue
+{
+  data: { // 第一个 .data：Axios 自动封装的响应体内容
+    code: 1,
+    msg: "登录成功",
+    data: { // 第二个 .data：后端业务真正返回的数据字段
+      id: 1,
+      username: "admin",
+      token: "abcdefg123456"
+    }
+  },
+  status: 200, // HTTP 状态码
+  statusText: "OK",
+  headers: { ... },
+  config: { ... },
+  request: { ... }
+}
+```
+
+- `res`：Axios 的完整响应对象
+- `res.data`：Axios 自动把 HTTP 响应体提取到 `.data` 属性中，表示整个 JSON 响应
+- `res.data.data`：后端返回的 `data` 字段，里面是用户信息、token 等业务数据
+- `res.data.data.token`：最终取出的就是后端返回的数据中的 `token` 字段
 
 
+1、axios 的 post 请求示例：
+
+```vue
+<script>
+export default {
+  methods: {
+    sendAxios() {
+      axios.post('/api/admin/employee/login',{
+        username:'admin',
+        password: '123456'
+      }).then(res => {
+        console.log(res.data)
+      }).catch(error => {
+        console.log(error.response)
+      })
+    }
+  }
+}
+</script>
+```
+
+2、axios 的 get 请求示例：
+
+```vue
+<script>
+export default {
+  methods: {
+    sendAxios() {
+      axios.get('/api/admin/shop/status',{
+          headers: {
+              token: 'xxx.yyy.zzz'
+          }
+      })
+    }
+  }
+}
+</script>
+```
+
+3、统一方式：
+
+```vue
+<script>
+export default {
+  methods: {
+    sendAxios() {
+      axios({
+        url: '/api/admin/employee/login',
+        method:'post',
+        data: {
+            username:'admin',
+            password: '123456'
+        }
+      }).then((res) => {
+          console.log(res.data.data.token)
+          axios({
+            url: '/api/admin/shop/status',
+            method: 'get',
+            params: {id: 100},
+            headers: {
+                token: res.data.data.token
+            }
+          })
+      }).catch((error) => {
+          console.log(error)
+      })
+    }
+  }
+}
+</script>
+```
+发送的请求为：http://localhost:7070/api/admin/employee/login ，它会被代理成：http://localhost:8080/admin/employee/login ，
+当成功发送登录请求后，就会再次发送一个查询店铺状态的请求，因为所有的请求都要经过 jwt 令牌校验，所以需要获取到登录请求时后端返回的 token
+
+```json
+{
+  code: 1,
+  data: {
+    id: 1,
+    name: "管理员",
+    token: "eyJhbGciOiJIUzI1NiJ9.eyJlbXBJZCI6MSwiZXhwIjoxNzUyOTIzOTc3fQ.EZi7siSt__gINnE6B3i4wF3KU-Yzue-UkT_-DAAuTXI",
+    userName: "admin"
+  },
+  msg: null
+}
+
+{
+  code: 1,
+  data: 1,
+  msg: null
+}
+```
+
+****
+## 3. 路由 Vue-Router
+
+### 3.1 路由配置
+
+vue 属于单页面应用，就是根据浏览器路径不同，用不同的视图组件替换这个页面内容。例如：
+
+- /home 显示 Home 组件 
+- /about 显示 About 组件
+
+Vue-Router 就是用于管理这种“路径 -> 组件”映射关系的工具
+
+为了能够使用路由功能，在前端项目的入口文件 main.js 中，创建Vue实例时需要指定路由对象：
+
+```js
+import Vue from 'vue'
+import App from './App.vue'
+import router from './router'
+
+Vue.config.productionTip = false
+
+new Vue({
+  router,
+  render: h => h(App)
+}).$mount('#app')
+```
+
+路由的组成：
+
+- VueRouter：路由器，根据路由请求在路由视图中动态渲染对应的视图组件
+- `<router-link>`：路由链接组件，浏览器会解析成 `<a>` 标签
+- `<router-view>`：路由视图组件，是一个占位符，用来展示与路由路径匹配的视图组件，比如当前路径是 /home，就会把 Home 组件渲染到 <router-view> 中。
+
+```vue
+<template>
+  <div id="app">
+    <nav>
+      <router-link to="/">Home</router-link> |
+      <router-link to="/about">About</router-link>
+    </nav>
+    <!--视图组件展示的位置-->
+    <router-view/>
+  </div>
+</template>
+```
+
+```js
+import Vue from 'vue'
+import VueRouter from 'vue-router'
+import HomeView from '../views/HomeView.vue'
+
+Vue.use(VueRouter)
+// 维护路由表，某个路由路径对应哪个视图组件
+const routes = [
+  {
+    path: '/',
+    name: 'home',
+    component: HomeView
+  },
+  {
+    path: '/about',
+    name: 'about',
+    // 懒加载，只有使用到该组件时才会加载
+    component: () => import('../views/AboutView.vue')
+  },
+  {
+    path: '/404',
+    component: () => import('../views/404View.vue')
+  },
+  { // 当上面的路径都没匹配到时，就走这里，进入 404 页面组件
+    path: '*',
+    redirect: '/404'
+  }
+]
+
+const router = new VueRouter({
+  routes
+})
+
+export default router
+```
+
+要实现路由跳转，可以通过标签式和编程式两种：
+
+- 标签式：`<router-link to="/about">About</router-link>`
+- 编程式：this.$router.push('/about')
+
+而路由的本质就是当请求某些 路径时不要去服务器加载新页面，而是在当前页面中把 `<router-view>` 替换成对应组件的内容，这样某些没存入 session 中的数据就不会因为页面的跳转而导致丢失数据，
+例如用户填写完表单并跳转到 About 页后，再次返回填写页面，就会发现输入框中的 name 还在，因为 Vue 没有刷新页面，组件状态仍然保留在内存中。
+
+****
+### 3.2 路由嵌套
+
+嵌套路由是指在一个路由组件中，还嵌套显示另一个组件的情况。它允许构建“父子视图”结构，比如：
+
+- 用户中心（父） 
+  - 个人信息（子） 
+  - 修改密码（子） 
+  - 订单记录（子）
+
+每个子页面都有自己的路径、组件，但都在父组件的页面框架下渲染。在 App.vue 视图组件中有 `<router-view>` 标签，其他视图组件可以展示在此（即标签所在地）。
+使用 ContainerView.vue 组件可以进行区域划分（分为上、左、右），在右边编写了 `<router-view>` 标签，点击左侧菜单时，可以将对应的子视图组件展示在此。
+
+实现步骤：
+
+1、安装并导入 elementui，实现页面布局（Container 布局容器）
+
+```shell
+npm i element-ui -s
+```
+
+在 main.js 中导入 elementui：
+
+```js
+import Vue from 'vue';
+import ElementUI from 'element-ui';
+import 'element-ui/lib/theme-chalk/index.css';
+import App from './App.vue';
+// 全局使用 elementui
+Vue.use(ElementUI);
+
+new Vue({
+  el: '#app',
+  render: h => h(App)
+});
+```
+
+2、创建布局容器与子视图组件
+
+3、在 src/router/index.js 中配置路由映射规则（嵌套路由配置）
+
+```js
+{
+  path: '/c',
+  component: () => import('../views/container/ContainerView.vue'),
+  // 嵌套路由（子路由），对应的组件会展示在当前组件内部
+  children: [// 通过 children 属性指定子路由相关信息（path、component）
+    {
+      path: '/c/p1',
+      component: () => import('../views/container/P1View.vue')
+    },
+    {
+      path: '/c/p2',
+      component: () => import('../views/container/P2View.vue')
+    },
+    {
+      path: '/c/p3',
+      component: () => import('../views/container/P3View.vue')
+    }
+  ]
+}
+```
+
+4、在 ContainerView.vue 布局容器视图中添加 `<router-view>`，实现子视图组件展示
+
+```vue
+<el-main>
+    <router-view/>
+</el-main>
+```
+
+5、在 ContainerView.vue 布局容器视图中添加 `<router-link>`，实现路由请求
+
+```vue
+<el-aside width="200px">
+    <router-link to="/c/p1">P1</router-link><br>
+    <router-link to="/c/p2">P2</router-link><br>
+    <router-link to="/c/p3">P3</router-link><br>
+</el-aside>
+```
+
+需要注意的是，直接访问 /c 路径的话默认是不展示这些子视图的，只有点击后才会展示，所以可以配置一个重定向，访问 /c 时直接重定向到 /c/p1 即可：
+
+```js
+path: '/c',
+component: () => import('../views/container/ContainerView.vue'),
+redirect: '/c/p1',
+```
+
+****
+## 4. 状态管理 vuex
+
+### 4.1 定义
+
+- vuex 是一个专为 Vue.js 应用程序开发的状态管理库
+- vuex 可以在多个组件之间共享数据，并且共享的数据是响应式的，即数据的变更能及时渲染到模板
+- vuex 采用集中式存储管理所有组件的状态
+
+每一个 Vuex 应用的核心就是 store（仓库），store 基本上就是一个容器，它包含着应用中大部分的状态 (state)。Vuex 和单纯的全局对象有以下两点不同：
+
+1. Vuex 的状态存储是响应式的，当 Vue 组件从 store 中读取状态的时候，若 store 中的状态发生变化，那么相应的组件也会相应地得到高效更新。
+2. 不能直接改变 store 中的状态，改变 store 中的状态的唯一途径就是显式地提交 (commit) mutation。
+
+- state：状态对象，集中定义各个组件共享的数据
+- mutations：类似于一个事件，用于修改共享数据，要求必须是同步函数
+- actions：类似于 mutation，可以包含异步操作，通过调用 mutation 来改变共享数据
+- getters：类似计算属性，用于从 state 中派生出状态
+- modules：将 store 拆分为多个模块，适合大型项目
+
+安装：
+
+```shell
+npm install vuex@3 --save
+```
+
+****
+### 4.2 使用
+
+1、初始化 Vue 实例时需要引入 store 对象：
+
+```js
+new Vue({
+  router,
+  store,
+  render: h => h(App)
+}).$mount('#app')
+```
+
+2、在 src/store/index.js 文件中集中定义和管理共享数据
+
+```js
+import Vue from 'vue'
+import Vuex from 'vuex'
+
+Vue.use(Vuex)
+// 集中管理多个组件共享的数据
+export default new Vuex.Store({
+  // 集中定义共享数据
+  state: {
+    name: '未登录游客'
+  },
+  getters: {
+  },
+  // 通过当前属性中定义的函数修改共享数据，必须都是同步操作
+  mutations: {
+  },
+  // 通过 actions 调用 mutation，在 actions 中可以进行异步操作
+  actions: {
+  },
+  modules: {
+  }
+})
+```
+
+3、在视图组件中展示共享数据
+
+```vue
+<template>
+  <div class="hello">
+    <!-- $store.state 为固定写法，用于访问共享数据-->
+    <h1>欢迎你，{{$store.state.name}}</h1>
+  </div>
+</template>
+```
+
+4、在 mutations 中定义函数，用于修改共享数据
+
+```js
+mutations: {
+  setName(state,newName) {
+    state.name = newName
+  }
+},
+```
+
+5、在视图组件中调用 mutations 中定义的函数
+
+```vue
+<input type="button" value="通过 mutations 修改共享数据" @click="handleUpdate">
+
+methods: {
+    handleUpdate() {
+      // mutations 中定义的函数不能直接调用，必须通过这种方式才能使用
+      // setName 为 mutations 中定义的函数名称，zhangsan 为传递的参数
+      this.$store.commit('setName', 'zhangsan')
+  },
+}
+```
+
+6、如果在修改共享数据的过程中有异步操作，则需要将异步操作的代码编写在 actions 的函数中
+
+```js
+actions: {
+  setNameByAxios(context){
+    axios({ // 异步请求
+      url: '/api/admin/employee/login',
+      method: 'post',
+      data: {
+        username: 'admin',
+        password: '123456'
+      }
+    }).then(res => {
+      if(res.data.code == 1){
+        // 异步请求后，需要修改共享数据
+        // 在 actions 中调用 mutation 中定义的 setName 函数
+        context.commit('setName',res.data.data.name)
+      }
+    })
+  }
+},
+```
+
+7、在视图组件中调用 actions 中定义的函数
+
+```vue
+methods: {
+  handleCallAction() {
+    // 在 actions 中定义的函数不能直接调用，必须通过 this.$store.dispatch('函数名称') 这种方式调用
+    this.$store.dispatch('setNameByAxios')
+  },
+}
+```
+
+****
+## 5. TypeScript
+
+### 5.1 定义
+
+TypeScript（简称 TS）是微软推出的开源语言，它是 JavaScript 的超集（JS 有的 TS 都有），该类文件扩展名为 ts，可以编译成标准的 JavaScript，并且在编译时进行类型检查。
+
+安装：
+
+```shell
+npm install -g typescript
+```
+
+1、创建 hello.ts 文件，内容如下：
+
+```ts
+// 定义一个函数 hello，并且指定参数类型为 string
+function hello(msg:string): void {
+      console.log(msg)
+}
+// 调用上面的函数，传递非 string 类型的参数
+hello(123)
+```
+
+2、使用 tsc 命令编译 hello.ts 文件
+
+```ts
+tsc .\hello.ts
+
+hello.ts:6:7 - error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+6 hello(123)
+```
+
+可以看到编译报错，提示参数类型不匹配，这说明在编译时 TS 会进行类型检查并阻止编译代码成 JavaScript，
+需要注意的是在编译为 JS 文件后类型会被擦除（浏览器无法识别 TypeScript 类型，且类型只是开发阶段的工具，运行时是 JavaScript 在工作），例如：
+
+```ts
+function hello(name) {
+  console.log("Hello, " + name);
+}
+```
+
+- TS 属于静态类型编程语言，JS 属于动态类型编程语言
+- 静态类型在编译期做类型检查，动态类型在执行期做类型检查
+- 对于 JS 来说，需要等到代码执行的时候才能发现错误（晚）
+- 对于 TS 来说，在代码编译的时候就可以发现错误（早）
+- 支持类型可以提升代码可读性与可维护性，并利用好编译工具的自动提示功能
+
+****
+### 5.2 常用类型
+
+基于 TS 进行前端开发时，类型标注的位置有如下 3 个：
+
+- 标注变量
+- 标注参数
+- 标注返回值
+
+```ts
+// 标注变量，指定变量 msg 的类型为 string
+let msg: string = 'hello ts !';
+
+// 标注参数和返回值，指定 m2 函数的参数类型为 string，并且返回值也为 string
+const m2 = (name: string): string => {
+  return name.toLowerCase() + msg;
+};
+```
+
+#### 1. 基础类型
+
+1、number
+
+```ts
+// 用于表示整数或浮点数
+let age: number = 25;
+let price: number = 9.99;
+```
+
+2、string
+
+```ts
+// 用于表示文本数据
+let name: string = "Alice";
+```
+
+3、boolean
+
+```ts
+let isLoggedIn: boolean = false;
+```
+
+4、null 和 undefined
+
+```ts
+let u: undefined = undefined;
+let n: null = null;
+```
+
+5、any
+
+```ts
+// 表示任意类型，关闭类型检查，一般不使用
+let data: any = 123;
+data = "hello";
+data = true;
+```
+
+6、unknown
+
+```ts
+// 类似 any，但更安全。不能直接进行操作，需先进行类型断言。
+let value: unknown = "Hello";
+if (typeof value === "string") {
+  console.log(value.toUpperCase());
+}
+```
+
+7、void
+
+```ts
+// 通常用于函数无返回值的场景
+function log(message: string): void {
+  console.log(message);
+}
+```
+
+8、never
+
+```ts
+// 表示永远不会有返回值的函数，如抛异常或无限循环
+function error(message: string): never {
+  throw new Error(message);
+}
+```
+
+****
+#### 2. 对象类型
+
+1、object
+
+```ts
+// 表示非原始类型
+let person: object = { name: "Bob", age: 30 };
+```
+
+2、接口
+
+```ts
+interface User {
+  id: number;
+  name: string;
+  isAdmin?: boolean; // 可选属性
+}
+// 属性要一一对应，不能多或少
+let user: User = { id: 1, name: "Tom" };
+```
+
+3、类型别名
+
+```ts
+type Point = {
+  x: number;
+  y: number;
+};
+
+let p: Point = { x: 10, y: 20 };
+```
+
+定义类与接口并继承与实现它们：
+
+```ts
+class User {
+  // 类的属性及类型标注
+  name: string; 
+  // 构造方法（Constructor）
+  constructor(name: string) { 
+    this.name = name;
+  }
+  // 类的方法（Method）
+  study() { 
+    console.log(`${this.name}正在学习`);
+  }
+}
+
+const u = new User('张三');
+console.log(u.name);
+u.study();
+```
+
+```ts
+interface Animal {
+  name: string;
+  eat(): void;
+}
+
+class Bird implements Animal {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  eat(): void {
+    console.log(this.name + ' eat');
+  }
+}
+
+const b1 = new Bird('杜鹃');
+console.log(b1.name);
+b1.eat();
+```
+
+```ts
+// 定义 Parrot 类，并且继承 Bird 类
+class Parrot extends Bird {
+  say(): void {
+    console.log(this.name + ' say hello');
+  }
+}
+
+const myParrot = new Parrot('Polly');
+myParrot.say();
+myParrot.eat();
+```
+
+****
+#### 3. 数组类型
+
+1、普通数组
+
+```ts
+let nums: number[] = [1, 2, 3];
+let strs: Array<string> = ["a", "b"];
+```
+
+2、元组（Tuple）
+
+```ts
+// 固定长度和类型顺序的数组
+let tuple: [string, number] = ["age", 25];
+```
+
+****
+#### 4. 其他
+
+1、联合类型（|）
+
+```ts
+// 可以为设置的任意一个类型
+let input: string | number;
+input = "hello";
+input = 123;
+```
+
+2、类型断言（Type Assertion）
+
+```ts
+// someValue 是 unknown，不能直接访问其属性，使用 as string 告诉 TS：“这个值是 string，可以访问它的 length 属性”，有点类似于转型
+let someValue: unknown = "abc";
+let strLength: number = (someValue as string).length;
+```
+
+3、枚举（enum）
+
+```ts
+// 自动为元素赋值，从 0 开始
+enum Role {
+  User, // 0
+  Admin, // 1
+  SuperAdmin // 2
+}
+
+let r: Role = Role.Admin; // 值为 1
+```
+
+****
 
 
 
