@@ -5687,11 +5687,641 @@ let r: Role = Role.Admin; // 值为 1
 ```
 
 ****
+# 二十、员工管理
+
+## 1. 前端环境搭建
+
+导入苍穹外卖项目前端初始工程，此工程中已经开发了部分功能，后续在此基础上开发新功能即可。主要代码在 src 目录中，src 目录的重点结构如下：
+
+- api：存放封装了 Ajax 请求文件的目录
+- components：公共组件存放目录
+- views：存放视图组件的目录
+- App.vue：项目的主组件，页面的入口文件
+- main.ts：整个项目的入口文件
+- router.ts：路由文件
+
+登录功能：
+
+1、获得登录页面路由地址
+
+程序启动后，会给出完整的访问地址：http://localhost:8888/#/ ，其中登录页面的路由地址为 /login，通过此路由地址可以找到对应的登录视图组件
+
+2、从 main.ts 中找到路由文件
+
+main.ts 是整个前端项目的入口文件，在此文件中会创建 Vue 实例，在创建 Vue 实例时需要传入路由对象，所以从此文件中可以找到对应的路由文件位置：
+
+```js
+import Router from 'vue-router'
+
+new Vue({
+  router,
+  store,
+  'render': (h) => h(App)
+}).$mount('#app')
+```
+
+3、从路由文件中找到登录视图组件
+
+在路由文件中会配置整个项目所有的路由映射规则，只需要找到 /login 这个路径对应的实体组件即可：
+
+```ts
+{
+  path: "/login",
+  component: () => import("@/views/login/index.vue"),
+  meta: { title: "苍穹外卖", hidden: true, notNeedAuth: true }
+},
+```
+
+4、从登录视图组件中找到登录方法
+
+从上面的路由文件可以确定登录视图组件就是 src/views/login/index.vue，此时就可以打开这个文件，然后仔细阅读代码，找到登录方法：
+
+```vue
+private handleLogin() {
+  (this.$refs.loginForm as ElForm).validate(async (valid: boolean) => {
+    if (valid) {
+      this.loading = true
+      await UserModule.Login(this.loginForm as any)
+        .then((res: any) => {
+      if (String(res.code) === '1') {
+        //登录成功，跳转到系统首页
+        this.$router.push('/')
+        } else {
+        // this.$message.error(res.msg)
+        this.loading = false
+        }
+      })    
+      .catch(() => {
+        // this.$message.error('用户名或密码错误！')
+        this.loading = false
+      })
+    } else {
+    return false
+    }
+  })
+}
+```
+
+****
+## 2. 员工分页查询
+
+从员工管理页面（组件）可以看到相关功能的位置为：src/views/employee/index.vue。只需要在此文件中开发员工分页查询相关的前端代码即可，
+整个开发过程大概可以分为以下几个关键步骤：
+
+1. 根据产品原型，制作页面头部效果（输入框、查询按钮等）
+2. 为查询按钮绑定单击事件，发送Ajax请求，查询员工分页数据，实现前后端交互
+3. 提供 vue 的初始化方法，在页面加载后就查询分页数据
+4. 使用 ElementUI 提供的表格组件展示分页数据
+5. 使用 ElementUI 提供的分页条组件实现翻页效果
+
+制作页面头部效果：
+
+大致效果就是页面上面有个搜索栏，用来输入员工姓名查询，然后右边是个添加员工的按钮，后续会绑定相关方法
+
+```vue
+<div class="container">
+  <div class="tableBar">
+    <label style="margin-right: 5px">
+      员工姓名:
+    </label>
+    <el-input v-model="name" placeholder="请输入员工姓名" style="width: 15%" clearable/>
+    <el-button type="primary" style="margin-left: 20px" @click="pageQuery()">查询</el-button>
+    <el-button type="primary" style="float: right">+添加员工</el-button>
+  </div>
+</div>
+```
+
+实现前后端数据交互：
+
+在 methods 中定义 pageQuery 方法，但按照开发规范，真正发送 Ajax 请求的代码需要封装到 api 目录下的 ts 文件中（src/api/employee.ts），然后再在这里进行调用，
+类似于控制层与服务层的关系。然后在员工管理组件中导入 employee.ts 中定义的方法，并在 data() 方法中定义分页相关的模型数据，需要将 name 属性和上面的员工姓名输入框进行双向绑定。
+然后再调用查询方法时，把这些参数封装进 params 中，传递给后端，total 和 records 则是用来接收后端返回的数据的，后端会封装为一个 Result<Page> 返回，
+里面包含 code（状态码）、total（总数据条数）、records（当前页具体数据集合）
+
+```vue
+<script lang="ts">
+import {getEmployeeList} from '@/api/employee'
+
+export default  {
+
+  // 模型数据
+  data() {
+    return {
+      name: '', // 查询员工姓名，对应上面的输入框
+      page: 1, // 页码
+      pageSize: 10, // 每页数据条数
+      total: 0, // 返回的总条数
+      records: [] // 返回的当前页要展示的数据集合
+    }
+  },
+
+  // vue 的生命周期方法，在当前页面（组件）加载后，就需要发送 Ajax 请求，直接查询第一页的数据，避免点击查询后才显示数据
+  created() {
+    this.pageQuery()
+  },
+
+  methods: {
+    // 分页查询
+    pageQuery(){
+      // 准备请求参数
+      const params = {
+        name:this.name,
+        page:this.page,
+        pageSize:this.pageSize
+      }
+      // 发送 ajax 请求，访问后端，获取分页数据
+      getEmployeeList(params).then(res => {
+        if (res.data.code === 1) {
+          this.total = res.data.data.total
+          this.records = res.data.data.records
+        }
+      }).catch(err => {
+        this.$message.error('请求出错了:' + err.message)
+      })
+    }
+  }
+}
+</script>
+```
+
+在 api 目录下的员工相关功能 ts 文件中进行具体请求封装，接收在 vue 页面封装好的参数，然后发送 get 请求。
+
+```ts
+// 分页查询
+export const getEmployeeList = (params: any) => {
+  return request({
+    url: '/employee/page',
+    method: 'get',
+    // 后面的 params 是传递过来的形参，前面的 params 是规定的接收变量名
+    params: params
+  })
+}
+```
+
+使用表格展示分页数据：
+
+在查询方框下方添加用于展示数据的表格：
+
+```vue
+<el-table :data="records" stripe class="tableBox">
+  <el-table-column prop="name" label="员工姓名" />
+  <el-table-column prop="username" label="账号" />
+  <el-table-column prop="phone" label="手机号" />
+  <el-table-column label="账号状态">
+    <template slot-scope="scope">
+      <div class="tableColumn-status" :class="{ 'stop-use': scope.row.status === 0 }">
+        <!--获取当前行的数据，动态展示为警用或启用-->
+        {{ scope.row.status === 0 ? '禁用' : '启用' }}
+      </div>
+    </template>
+  </el-table-column>
+  <el-table-column prop="updateTime" label="最后操作时间" />
+  <el-table-column label="操作" width="160" align="center">
+    <template slot-scope="scope">
+      <el-button type="text" size="small">
+        修改
+      </el-button>
+      <el-button type="text" size="small">
+        {{ scope.row.status === '1' ? '禁用' : '启用' }}
+      </el-button>
+    </template>
+  </el-table-column>
+</el-table>
+```
+
+在展示数据的表格下方使用 ElementUI 提供的分页条组件，并绑定事件处理函数：
+
+```vue
+<el-pagination
+  class="pageList"
+  :page-sizes="[10,20,30,40,50]"
+  :page-size="pageSize"
+  layout="total, sizes, prev, pager, next, jumper"
+  :total="total"
+  <!--当每页查询条数发生变化时触发-->
+  @size-change="handleSizeChange"
+  @current-change="handleCurrentChange"
+/>
+```
+
+```vue
+// pageSize 发生变化时触发
+handleSizeChange(pageSize) {
+  this.pageSize = pageSize
+  this.pageQuery()
+},
+// page 发生变化时触发
+handleCurrentChange(page) {
+  this.page = page
+  this.pageQuery()
+}
+```
+
+****
+## 3. 启用禁用员工账号
+
+在员工分页展示的表格中，有一个启用禁用按钮，点击后会发送请求，后端会修改该员工的状态，而前端则需要修改此按钮，让它变成当前状态的相反状态。
+
+1、为启用、禁用按钮绑定单击事件
+
+传入当前行对象（row）给方法，然后根据具体的行对象的 status 展示对应的状态（展示禁用还是启用），status 实际上就是上面分页查询时返回的 records 数组中的某一条数据的 status 字段，例如：
+
+```json
+{
+  name: "张三",
+  username: "zhangsan",
+  phone: "12345678901",
+  status: 1,
+  updateTime: "2025-07-20 12:00:00"
+},
+```
+
+```vue
+<el-button type="text" size="small" @click="handleStartOrStop(scope.row)">
+  {{ scope.row.status === '1' ? '禁用' : '启用' }}
+</el-button>
+```
+
+2、编写对应的处理函数 handleStartOrStop
+
+同样的，具体的 ajax 请求在 api 的 employee.ts 文件中进行封装：
+
+```vue
+handleStartOrStop(row) {
+  if (row.username === 'admin') {
+  this.$message.error('admin 为管理员账号，不能更改此账号状态！')
+  return
+  }
+  // 调用 Element UI 的确认弹窗，提示用户确认调整账号状态
+  this.$confirm('确认调整该账号的状态?', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => {
+    // 点击确定后，调用启用/禁用员工账号的接口
+    enableOrDisableEmployee({
+    id: row.id,
+    status: !row.status ? 1 : 0
+    })
+    .then((res) => {
+        // 接口请求成功，且响应状态码为 200 时
+        if (res.status === 200) {
+        // 弹出成功提示
+        this.$message.success('账号状态更改成功!')
+        // 重新查询页面数据，刷新表格展示
+        this.pageQuery()
+      }
+  })
+  .catch((err) => {
+    // 接口请求失败时，弹出错误提示
+    this.$message.error('请求出错了: ' + err.message)
+    })
+  })
+}
+```
+
+需要注意的是，传入方法中的参数是当前行数据 row，所以如果要点击启用、禁用按钮后修改按钮的表示值，就需要把它的状态值一起修改，所以先对 row.status 进行取反操作（!），将其转换为布尔值。
+若 row.status 为 1（即启用状态），取反后就变成 false，然后根据三元运算符，就被重新设置为 0。
+
+```ts
+// 启用禁用员工账号
+export const enableOrDisableEmployee = (params: any) => {
+  return request({
+    url: `/employee/status/${params.status}`,
+    method: 'post',
+    params: {
+      id: params.id
+    }
+  })
+}
+```
+
+****
+## 4. 新增员工
+
+1、为“添加员工”按钮绑定单击事件
+
+```vue
+<el-button type="primary" style="float: right" @click="handleAddEmp">+添加员工</el-button>
+```
+
+2、编写 handleAddEmp 方法，进行路由跳转
+
+```vue
+// 跳转到新增员工页面
+handleAddEmp() {
+  this.$router.push('/employee/add')
+},
+```
+
+3、在 addEmployee.vue 添加表单
+
+```vue
+<div class="container">
+  <el-form :model="ruleForm" :rules="rules" ref="ruleForm" label-width="180px">
+    <el-form-item label="账号" prop="username">
+      <el-input v-model="ruleForm.username"></el-input>
+    </el-form-item>
+    <el-form-item label="员工姓名" prop="name">
+      <el-input v-model="ruleForm.name"></el-input>
+    </el-form-item>
+    <el-form-item label="手机号" prop="phone">
+      <el-input v-model="ruleForm.phone"></el-input>
+    </el-form-item>
+    <el-form-item label="性别" prop="sex">
+      <el-radio v-model="ruleForm.sex" label="1">男</el-radio>
+      <el-radio v-model="ruleForm.sex" label="2">女</el-radio>
+    </el-form-item>
+    <el-form-item label="身份证号" prop="idNumber">
+      <el-input v-model="ruleForm.idNumber"></el-input>
+    </el-form-item>
+    <div class="subBox">
+      <el-button type="primary" @click="submitForm('ruleForm',false)">保存</el-button>
+      <el-button
+              v-if="this.optType === 'add'"
+              type="primary"
+              @click="submitForm('ruleForm',true)">保存并继续添加员工
+      </el-button>
+      <el-button @click="() => this.$router.push('/employee')">返回</el-button>
+    </div>
+  </el-form>
+</div>
+```
+
+表单中包含五个元素，账号、员工姓名、手机号、性别、身份证号，既然是要输入东西传给后端存入数据库，那就必须对这些填写的数据进行校验，看是否复合规则，
+`<el-form :model="ruleForm" :rules="rules" ref="ruleForm" label-width="180px">` ，`:model="ruleForm"` 用来存放和双向绑定该表单中填写的数据，
+然后作为参数传递给后端；`:rules="rules"` 表示绑定校验规则，待会写一个 rules 即可；`ref="ruleForm"` 则表示可以通过 this.$refs.ruleForm 访问表单实例。
+
+4、定义模型数据和表单规则
+
+创建 ruleForm 用来绑定表单中填写的数据，默认值都为空，姓名和账号只需要校验是否填写即可，但是手机号和身份证则需要判断格式是否正确，
+所以可以自定义一个校验函数，利用正则表达式判断表单中输入的内容（value）是否复合要求。
+
+```vue
+<script lang="ts">
+export default {
+  data() {
+    return {
+      ruleForm: {
+        name: '',
+        username: '',
+        sex: '1',
+        phone: '',
+        idNumber: ''
+      }
+    }
+  },
+  rules: {
+    name: [
+      {
+        required: true, message: '请输入员工姓名', trigger: 'blur'
+      }
+    ],
+    username: [
+      {
+        required: true, message: '请输入账号', trigger: 'blur'
+      }
+    ],
+    phone: [
+      {
+        required: true,
+        trigger: 'blur',
+        // 自定义校验函数，通过调用 callback 来表示成功或失败
+        validator: (rule, value, callback) => {
+          if (value === '' || (!/^1[3|4|5|6|7|8]\d{9}$/.test(value))) {
+            callback(new Error('请输入正确的手机号'))
+          } else {
+            callback()
+          }
+        }
+      }
+    ],
+    idNumber: [
+      {
+        required: true,
+        trigger: 'blur',
+        validator: (rule, value, callback) => {
+          if (value === '' || (!/(^\d{15}$)|(^\d{18}$)|(^\d{17}(\d|X|x)$)/.test(value))) {
+            callback(new Error('请输入正确的身份证号'))
+          } else {
+            callback()
+          }
+        }
+      }
+    ]
+  },
+}
+</script>
+```
+
+5、编写提交表单的方法
+
+该方法接收两个参数，一个是绑定表单中填写的数据对象，一个是是否继续添加的标识。在发送 ajax 请求前仍然需要进行一次数据校验，这里就用到了 `this.$refs[formName].validate`，
+上面之前绑定的标识，通过这个代表使用了该校验规则，因为上面的写法只是给你提示格式错误或者没有填写数据，如果这里不添加这个的话，就算格式有误也能发送请求。
+通过校验后才能发送 ajax 请求，然后根据返回结果以及 isContinue 的值决定是否继续添加（即保留在当前页面组件，不返回员工页面组件）。
 
 
+```vue
+<script lang="ts">
+import { addEmployee } from '@/api/employee'
+export default {
+  ...
+  methods: {
+    submitForm(formName, isContinue) {
+      // 表单数据校验
+      this.$refs[formName].validate((valid) => {
+        if (valid) {
+          addEmployee(this.ruleForm)
+            .then((res) => {
+              if (res.data.code === 1) {
+                this.$message.success('员工添加成功！')
+                if (!isContinue) {
+                  this.$router.push({ path: '/employee' })
+                } else {
+                  this.ruleForm = {
+                    username: '',
+                    name: '',
+                    phone: '',
+                    sex: '1',
+                    idNumber: ''
+                  }
+                }
+              } else {
+                this.$message.error(res.data.msg)
+              }
+            })
+        }
+      });
+    }
+  }
+}
+</script>
+```
 
+同样的，在 employee.ts 中编写 ajax 请求
 
+```ts
+// 新增员工
+export const addEmployee = (params: any) => {
+  return request({
+    url: '/employee',
+    method: 'post',
+    data: params
+  })
+}
+```
 
+****
+## 5. 修改员工
+
+该功能和新增员工类似，都是使用同一个页面组件与表单，但修改员工信息涉及数据的回显，所以需要产地员工的 id 给后端查询数据库该员工的信息。
+
+1、在员工管理页面中，为“修改”按钮绑定单击事件，用于跳转到修改页面；并在 methods 中编写 handleUpdateEmp 方法，实现路由跳转
+
+```vue
+<el-button type="text" size="small" @click="handleUpdateEmp(scope.row)">
+  修改
+</el-button>
+```
+
+```vue
+// 修改员工，跳转至修改员工页面（组件）
+handleUpdateEmp(row) {
+  if(row.username === 'admin'){
+    // 如果是内置管理员账号，则不允许修改
+    this.$message.error('admin为管理员账号，不能修改！')
+    return
+  }
+  // 跳转到修改页面，通过地址栏传递参数
+this.$router.push({
+    path: '/employee/add',
+    query: {
+      id: row.id
+    }
+  })
+}
+```
+
+使用路由对象的 push 方法在进行路由跳转时，可以通过地址栏传递参数，具体语法为：
+
+```vue
+this.$router.push({
+    path: 路由路径,
+    query:{
+        参数名:参数值
+    }
+})
+```
+
+3、在 addEmployee.vue 组件中定义模型数据 optType，用于区分本次操作是新增还是修改
+
+```vue
+data() {
+  return {
+    optType: '', // 当前操作类型：新增（add）或修改（update）
+    ruleForm: {
+      name: '',
+      username: '',
+      sex: '1',
+      phone: '',
+      idNumber: ''
+    }
+  }
+},
+```
+
+添加一个生命周期函数，当有请求跳转到该组件时就触发（从员工页面跳转到表单页面），然后获取请求参数，如果能获取到 id，则当前操作为修改，否则为新增。
+
+```vue
+created() {
+  // 获取路由参数（id），如果有则为修改操作，否则为修改操作
+  this.optType = this.$route.query.id ? 'update' : 'add'
+},
+```
+
+4、如果是修改操作，需要根据 id 查询员工原始信息用于页面回显，需要在 employee.ts 中创建 queryEmployeeById 方法，
+然后在 addEmployee.vue 组件的 created 方法中查询员工原始信息用于页面数据回显 
+
+```vue
+created() {
+  // 获取路由参数（id），如果有则为修改操作，否则为修改操作
+  this.optType = this.$route.query.id ? 'update' : 'add'
+  if (this.optType === 'update') {
+    // 修改操作，需要根据 id 查询原始数据，用于回显
+    queryEmployeeById(this.$route.query.id)
+      .then((res) => {
+        if (res.data.code === 1) {
+        // 把数据填充到表单中
+        this.ruleForm = res.data.data
+      }
+    })
+  }
+},
+```
+
+5、修改 addEmployee.vue 组件中的 submitForm 方法，需要根据当前操作类型执行新增或者修改操作；然后在 employee.ts 中发送 ajax 请求
+
+```vue
+<script lang="ts">
+  methods: {
+    submitForm(formName, isContinue) {
+      //表单数据校验
+      this.$refs[formName].validate((valid) => {
+        if (valid) {
+          // 根据操作类型执行新增或者修改操作
+          if (this.optType === 'add') {
+            addEmployee(this.ruleForm)
+                    .then((res) => {
+                      if (res.data.code === 1) {
+                        this.$message.success('员工添加成功！')
+                        if (!isContinue) {
+                          this.$router.push({ path: '/employee' })
+                        } else {
+                          this.ruleForm = {
+                            username: '',
+                            name: '',
+                            phone: '',
+                            sex: '1',
+                            idNumber: ''
+                          }
+                        }
+                      } else {
+                        this.$message.error(res.data.msg)
+                      }
+                    })
+          } else {
+            // 执行修改操作
+            updateEmployee(this.ruleForm).then((res : any) => {
+              if (res.data.code === 1) {
+                this.$message.success('员工信息修改成功！')
+                this.$route.push({
+                  path: '/employee'
+                })
+              } else {
+                this.$message.error(res.data.msg)
+              }
+            })
+          }
+        }
+      });
+    }
+  }
+}
+</script>
+```
+
+```ts
+// 修改员工
+export const updateEmployee = (params: any) => {
+  return request({
+    url: '/employee',
+    method: 'put',
+    data: params
+  })
+}
+```
+
+****
 
 
 
