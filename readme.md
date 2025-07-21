@@ -6322,6 +6322,388 @@ export const updateEmployee = (params: any) => {
 ```
 
 ****
+# 二十一、套餐管理
+
+## 1. 套餐分页查询
+
+要开发前端代码，首先需要找到对应的组件，从路由文件 router.ts 中找到套餐管理页面（组件）。可以看到，套餐管理页面（组件）的位置为：src/views/setmeal/index.vue。
+整个开发过程大概可以分为以下几个关键步骤：
+
+1. 根据产品原型，制作页面头部效果（输入框、下拉框、查询按钮等）
+2. 动态填充套餐分类下拉框中的分类数据
+3. 为查询按钮绑定单击事件，发送Ajax请求，查询套餐分页数据，实现前后端交互
+4. 提供 vue 的初始化方法，在页面加载后就查询分页数据
+5. 使用 ElementUI 提供的表格组件展示分页数据
+6. 使用 ElementUI 提供的分页条组件实现翻页效果
+
+1、制作页面头部效果（输入框、查询按钮等）
+
+输入框和按钮都是使用 ElementUI 提供的组件，对于前端的组件只需要参考 ElementUI 提供的文档，进行修改即可：
+
+```vue
+<div class="tableBar">
+  <label style="margin-right: 10px">套餐名称:</label>
+  <el-input style="width: 14%" clearable />
+  <label style="margin-right: 10px; margin-left: 20px">套餐分类:</label>
+  <el-select v-model="categoryId" placeholder="请选择"> // 把这个选项的 value 值绑定到 <el-select> 的 v-model="value" 上
+    <el-option
+            v-for="item in options" // 遍历数组，表示从 options 中获取元素
+            :key="item.id" // 作为唯一标识
+            :label="item.name" // 选项显示内容
+            :value="item.id"> // 选项的值
+    </el-option>
+  </el-select>
+  <label style="margin-right: 10px; margin-left: 20px">售卖状态:</label>
+  <el-select v-model="status" style="width: 14%" placeholder="请选择" clearable>
+    <el-option v-for="item in statusArr"
+               :key="item.value"
+               :label="item.label"
+               :value="item.value" />
+  </el-select>
+  <el-button type="primary" style="margin-left: 20px"> 查询</el-button>
+  <div style="float: right">
+    <el-button type="danger"> 批量删除</el-button>
+    <el-button type="info"> + 新建套餐</el-button>
+  </div>
+</div>
+```
+
+因为制作的是一个下拉框，所以需要给每个下拉选项中拟定初始值：
+
+```vue
+<script lang="ts">
+export default {
+  data() {
+    return {
+      options: [
+        {
+          value: '选项1',
+          label: '黄金糕'
+        },
+        {
+          value: '选项2',
+          label: '双皮奶'
+        }
+      ],
+      categoryId: '',
+      statusArr: [
+        {
+          value: '0',
+          label: '启售'
+        },
+        {
+          value: '1',
+          label: '停售'
+        }
+      ],
+      status: ''
+    }
+  }
+}
+</script>
+```
+
+2、动态填充套餐分类下拉框数据
+
+现在需要将套餐分类下拉框中的数据改为动态获取，即前端需要发送 Ajax 请求，调用后端的分类查询接口，然后将后端返回的套餐分类数据动态展示在下拉框中。
+因为本次前后端交互需要查询分类数据，所以按照项目规范，发送 Ajax 请求的代码需要定义到 src/api/category.ts 文件中：
+
+```ts
+// 查询分类列表接口
+export const getCategoryPage = (params: any) => {
+  return request({
+    url: '/category/page',
+    method: 'get',
+    params
+  });
+};
+```
+
+然后将此方法（getCategoryByType）导入当前组件，然后在 created 方法中调用此方法，获取套餐分类数据，动态填充套餐分类下拉框即可：
+
+```vue
+created() {
+  // 查询套餐分类，用于填充查询页面的下拉框
+  getCategoryByType({
+      type: 2 // 因为此处要查询的是套餐分类，所以传递的参数 type 值为 2
+    }).then(res => {
+      if (res.data.code === 1) {
+      this.options = res.data.data
+    }
+  })
+}
+```
+
+可以动态获取数据后，data 中的数据也要修改
+
+```vue
+data() {
+  return {
+    options: [],
+    status: '',
+    categoryId: '',
+    saleStatusArr: [
+      {
+        value: '1',
+        label: '启售'
+      },
+      {
+        value: '0',
+        label: '停售'
+      }
+    ],
+  }
+},
+```
+
+3、动态获取套餐分页数据
+
+为查询按钮绑定单击事件，并在 methods 中定义 pageQuery 方法，然后在 setMeal.ts 封装 ajax 请求
+
+```vue
+<el-button type="primary" style="margin-left: 20px" @click="pageQuery()"> 查询</el-button>
+```
+
+```vue
+methods: {
+  // 套餐查询分页
+  pageQuery() {
+    // 封装分页查询参数
+    const params = {
+      page: this.page,
+      pageSize: this.pageSize,
+      name: this.name,
+      status: this.status,
+      categoryId: this.categoryId
+    }
+  // 调用分页查询接口
+  getSetmealPage(params)
+    .then(res => {
+      if(res.data.code === 1) {
+        this.total = res.data.data.total
+        this.records = res.data.data.records
+      }
+    })
+  }
+}
+```
+
+```ts
+// 套餐分页查询
+export const getSetmealPage = (params: any) => {
+  return request({
+    url: '/setmeal/page',
+    method: 'get',
+    params: params
+  })
+}
+```
+
+同样的问题，只有点击查询按钮后才会发送查询请求，但实际情况下应该是跳转到该页面就展示内容，所以要在 created 方法中调用查询方法，默认展示第一页的数据：
+
+```vue
+created() {
+    ...
+  // 查询套餐分页内容
+  this.pageQuery()
+},
+```
+
+4、使用表格展示分页数据
+
+```vue
+<el-table :data="records" stripe class="tableBox">
+  <el-table-column type="selection" width="25" />
+  <el-table-column prop="name" label="套餐名称" />
+  <el-table-column label="图片">
+    <template slot-scope="scope">
+      <el-image style="width: 80px; height: 40px; border: none" :src="scope.row.image"></el-image>
+    </template>
+  </el-table-column>
+  <el-table-column prop="categoryName" label="套餐分类" />
+  <el-table-column prop="price" label="套餐价"/>
+  <el-table-column label="售卖状态">
+    <template slot-scope="scope">
+      <div class="tableColumn-status" :class="{ 'stop-use': scope.row.status === 0 }">
+        {{ scope.row.status === 0 ? '停售' : '启售' }}
+      </div>
+    </template>
+  </el-table-column>
+  <el-table-column prop="updateTime" label="最后操作时间" />
+  <el-table-column label="操作" align="center" width="250px">
+    <template slot-scope="scope">
+      <el-button type="text" size="small"> 修改 </el-button>
+      <el-button type="text" size="small">
+        {{ scope.row.status == '1' ? '停售' : '启售' }}
+      </el-button>
+      <el-button type="text" size="small"> 删除 </el-button>
+    </template>
+  </el-table-column>
+</el-table>
+```
+
+使用 ElementUI 提供的分页条组件，并绑定事件处理函数，效果与分页下标类似，只不过这里是通过使用滚动条达到发送请求的目的：
+
+```vue
+<el-pagination
+        class="pageList"
+        :page-sizes="[10,20,30,40,50]"
+        :page-size="pageSize"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        @size-change="handleSizeChange"
+        @current-change="handleCurrentChange"
+/>
+```
+
+```vue
+//分页条的事件处理函数，pageSize 改变时会触发
+handleSizeChange(pageSize) {
+  this.pageSize = pageSize
+  this.pageQuery()
+},
+//分页条的事件处理函数，currentPage 改变时会触发
+handleCurrentChange(page) {
+  this.page = page
+  this.pageQuery()
+}
+```
+
+****
+## 2. 起售停售套餐
+
+1、为启售停售按钮绑定单击事件
+
+```vue
+<el-button type="text" size="small" @click="handleStartOrStop(scope.row)">
+  {{ scope.row.status == '1' ? '停售' : '启售' }}
+</el-button>
+```
+
+2、编写对应的处理函数 handleStartOrStop
+
+```vue
+<script lang="ts">
+export default {
+    // 套餐起售停售
+    handleStartOrStop(row) {
+      this.$confirm('确认调整该套餐的售卖状态?', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }).then(() => {
+        enableOrDisableSetmeal({
+          id: row.id,
+          status: !row.status ? 1 : 0 // 点击起售停售按钮后修改对应的状态，显示相反的按钮
+        }).then((res) => {
+            if (res.status === 200) {
+              this.$message.success('套餐售卖状态更改成功！')
+              this.pageQuery()
+            }
+          })
+          .catch((err) => {
+            this.$message.error('请求出错了：' + err.message)
+          })
+      })
+    }
+  }
+}
+</script>
+```
+
+```ts
+// 套餐起售停售
+export const enableOrDisableSetmeal = (params: any) => {
+  return request({
+    url: `setmeal/status/${params.status}`,
+    method: 'post',
+    params: {
+      id: params.id
+    }
+  })
+}
+```
+
+****
+## 3. 删除套餐
+
+点击删除按钮删除指定的一个套餐，但状态为 “启售” 的套餐不能删除，需要给出操作提示。不过删除分为单个删除和批量删除，但它们可以通过一个接口实现。
+
+1、编写 ajax 请求
+
+这里接收的是多个 id，用 `,` 隔开
+
+```ts
+// 删除套餐接口
+export const deleteSetmeal = (ids: string) => {
+  return request({
+    url: '/setmeal',
+    method: 'delete',
+    params: { ids: ids }
+  })
+}
+```
+
+2、绑定单击事件（单个删除和批量删除）
+
+```vue
+<el-button type="text" size="small" @click="handleDelete('S', scope.row.id)"> 删除 </el-button>
+<el-button type="danger" @click="handleDelete"> 批量删除</el-button>
+```
+
+3、为表格组件添加 selection-change 事件和对应的处理函数，通过此事件可以动态获取到当前勾选的套餐有哪些
+
+```vue
+<el-table :data="records" stripe class="tableBox" @selection-change="handleSelectionChange">
+  ...
+</el-table>
+```
+
+```vue
+// 当选项发生变化时会触发该事件
+handleSelectionChange(val) {
+  this.multipleSelection = val // 把传递的参数赋值给一个 [] 接收，在后续删除套餐的方法中通过这个 [] 来获取每一行的数据的 id
+}
+```
+
+val 是 ElementUi 传递的参数，表示的是当前勾选的那些行，本身是一个集合的形式
+
+4、完善 handleDelete 方法
+
+```vue
+// 删除套餐
+handleDelete(type: string, id: string) {
+  let param = ''
+  // 判断当前是单个删除还是批量删除
+  if(type === 'S'){
+      // 单个删除
+      param = id
+    }else {
+      // 批量删除
+      const arr = new Array
+      this.multipleSelection.forEach(element => {
+        // 将套餐 id 放入数组中
+        arr.push(element.id)
+      })
+      param = arr.join(',') // 将数组中的 id 拼接到一起，中间用逗号分隔
+    }
+    deleteSetmeal(param).then(res => {
+      if(res.data.code === 1){
+        this.$message.success('删除成功！')
+        this.pageQuery()
+      }else{
+        this.$message.error(res.data.msg)
+      }
+  })
+},
+```
+
+****
+
+
+
+
+
 
 
 
